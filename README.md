@@ -44,7 +44,7 @@ The basic workflow for using the library is as follows:
 
 
 ## 📊 Usage Examples  
-The [`examples/`](./examples) folder contains ready-to-use reference projects: 
+The [`examples/`](./examples) folder contains ready-to-use reference projects. These examples have been carried out using the STM32F407 Discovery1 development board, and they make use of the Timer 4 channels connected to the board's LEDs, allowing the pulse outputs to be visually observed.
 - [StepGenerator_Multiple](./examples/StepGenerator_Multiple):  Configures a single pulse generator in finite pulse generation mode.  
 Blocks execution until the generation is complete before starting another with a different frequency.
 ```c
