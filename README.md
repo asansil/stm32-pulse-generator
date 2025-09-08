@@ -42,8 +42,8 @@ The basic workflow for using the library is as follows:
 
 - Add the callback function `HAL_TIM_OC_DelayElapsedCallback`.
 The examples provide callback functions for:  
-  - **Single generator mode**: [`callback_single_generator.c`](./Examples/Pulse_Generator_Single/Core/Src/callback.c)  
-  - **Multiple generators mode**: [`callback_multiple_generators.c`](path/to/file/callback_multiple_generators.c)
+  - **Single generator mode**: [`callbacks.c`](./Examples/PulseGenerator_Single/Core/Src/callbacks.c)  
+  - **Multiple generators mode**: [`callbacks.c`](./Examples/PulseGenerator_Multiple/Core/Src/callbacks.c)
  
 
 
