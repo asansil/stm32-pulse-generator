@@ -1,3 +1,4 @@
+
 # STM32 Pulse Generator ⏱️⚡  
 
 A lightweight and non-blocking C library for pulse generation on STM32 microcontrollers.  
@@ -9,10 +10,13 @@ It can be used for **stepper motor control**, **signal modulation**, or any appl
 
 
 ## 🚀 Features  
-- Generation of pulse trains with configurable frequency.  
-- **Non-blocking** implementation based on timer interrupts.  
-- Compatible with **STM32 HAL**.  
-- Supports multiple independent pulse generators.
+- Pulse train generation with **configurable and precise frequency**, available in two modes:  
+  - **Finite mode** → Generates a user-specified number of pulses.  
+  - **Continuous mode** → Generates pulses continuously until manually stopped.  
+- **Non-blocking implementation** using timer interrupts.  
+- Fully compatible with **STM32 HAL**.  
+- Supports **multiple independent pulse generators** operating simultaneously.
+
 
 
 ## 📂 Adding the Library to STM32CubeIDE Project
@@ -20,9 +24,9 @@ It can be used for **stepper motor control**, **signal modulation**, or any appl
 1. Copy the [`Pulse_Generator`](./Pulse_Generator) folder into the `Drivers` directory of your STM32CubeIDE project.
 
 2. In STM32CubeIDE, open your project **Properties → C/C++ General → Paths and Symbols** and add the following include path:
-```text
-/${ProjName}/Drivers/Pulse_Generator/Inc
-```
+	```text
+	/${ProjName}/Drivers/Pulse_Generator/Inc
+	```
 
 > Alternatively, you can copy `pulse_gen.h` and `pulse_gen.c` directly into your project source and include directories as needed.
 
@@ -32,18 +36,28 @@ It can be used for **stepper motor control**, **signal modulation**, or any appl
 The basic workflow for using the library is as follows:
 
 1. **Configure timers in STM32CubeIDE**  
-   - Set up the microcontroller clocks as needed, particularly the **APB1** and **APB2** timers, which will drive the timers used for pulse generation.  
-   - Select the timers that will be used for pulse generation.  
-   - For each timer, configure the desired **channels** in **Output Compare mode**, and set the **Toggle on match** mode so the pin automatically changes state on each match.  
-   - In the **NVIC Settings** tab, enable the timer’s global interrupts (`TIMx global interrupt`), which are required for the library to handle events without blocking the CPU.  
-   - Once clocks and timers are configured, generate the code automatically through the IDE.  
+	  - Set up the microcontroller clocks as needed, particularly the **APB1** and **APB2** timers, which will drive the timers used for pulse generation.  
+		  > **Note:** The maximum achievable pulse frequency is limited by the timer main clock, with an upper bound of *TIMx_CLK / 2*.
+		  
+	  - Select the timers that will be used for pulse generation.  
+	  - For each timer, configure the desired **channels** in **Output Compare mode**, and set the **Toggle on match** mode so the pin automatically changes state on each match.  
+	  - In the **NVIC Settings** tab, enable the timer’s global interrupts (`TIMx global interrupt`), which are required for the library to handle events without blocking the CPU.  
+	  - Once clocks and timers are configured, generate the code automatically through the IDE.  																												
 
 2. **Library implementation**
+	  - Initialize the Step Generator handle. The required parameters are:  
+	     - **htim** → The base timer handle on which the generator depends.  
+		 - **TimChannel** → The specific channel used to output pulses.  
+		 - **MaxPulseFreq** → Maximum pulse frequency allowed (exceeding it triggers an error).  
+	     - **MinDeltaCCR** → Defines the timer resolution at the maximum frequency.
+        
+		   > **Note:** Increasing the maximum frequency or decreasing the minimum CCR increment expands the available frequency range, but reduces the resolution.
+		   > **Important:** For step generators sharing the same timer, `MaxPulseFreq` and `MinDeltaCCR` must have identical values.
 
-- Add the callback function `HAL_TIM_OC_DelayElapsedCallback`.
-The examples provide callback functions for:  
-  - **Single generator mode**: [`callbacks.c`](./Examples/PulseGenerator_Single/Core/Src/callbacks.c)  
-  - **Multiple generators mode**: [`callbacks.c`](./Examples/PulseGenerator_Multiple/Core/Src/callbacks.c)
+     - Add the callback function `HAL_TIM_OC_DelayElapsedCallback`.
+	   The examples provide callback functions for:  
+   	     - **Single generator mode**: [`callbacks.c`](./Examples/PulseGenerator_Single/Core/Src/callbacks.c)  
+   	     - **Multiple generators mode**: [`callbacks.c`](./Examples/PulseGenerator_Multiple/Core/Src/callbacks.c)
  
 
 
