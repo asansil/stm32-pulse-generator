@@ -62,8 +62,8 @@ The basic workflow for using the library is as follows:
 
 
 ## 📊 Usage Examples  
-The [`examples/`](./examples) folder contains ready-to-use reference projects. These examples have been carried out using the STM32F407 Discovery1 development board, and they make use of the Timer 4 channels connected to the board's LEDs, allowing the pulse outputs to be visually observed.
-- [StepGenerator_Single](./examples/StepGenerator_Single):  Configures a single pulse generator in finite pulse generation mode.  
+The [`examples/`](./Examples) folder contains ready-to-use reference projects. These examples have been carried out using the STM32F407 Discovery1 development board, and they make use of the Timer 4 channels connected to the board's LEDs, allowing the pulse outputs to be visually observed.
+- [PulseGenerator_Single](./Examples/PulseGenerator_Single):  Configures a single pulse generator in finite pulse generation mode.  
 Blocks execution until the generation is complete before starting another with a different frequency.
 ```c
 /* Initialize the Pulse Generator application */
@@ -77,7 +77,7 @@ while(hPulseGen1.State != PULSEGEN_INACTIVE) {}
 PulseGen_SetPulseFreq(&hPulseGen1, 15);
 PulseGen_GeneratePulses(&hPulseGen1, 40);
 ```
-- [StepGenerator_Multiple](./examples/StepGenerator_Multiple):  Configures multiple pulse generators with different frequencies and starts some in finite pulse generation mode and others in continuous mode.
+- [PulseGenerator_Multiple](./Examples/PulseGenerator_Multiple):  Configures multiple pulse generators with different frequencies and starts some in finite pulse generation mode and others in continuous mode.
 ```c
 /* Initialize the Pulse Generator application */
 APP_PulseGen_Init();
