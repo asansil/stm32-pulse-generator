@@ -51,7 +51,7 @@ The basic workflow for using the library is as follows:
 		 - **MaxPulseFreq** → Maximum pulse frequency allowed (exceeding it triggers an error).  
 	     - **MinDeltaCCR** → Defines the timer resolution at the maximum frequency.
         
-		   > **Note:** Increasing the maximum frequency or decreasing the minimum CCR increment expands the available frequency range, but reduces the resolution. For a clearer understanding of how these configuration values affect the output, you can refer to the [`PulseGen.xlsx`](./Pulsegen.xlsx) spreadsheet.
+		   > **Note:** Increasing the maximum frequency or decreasing the minimum CCR increment expands the available frequency range, but reduces the resolution. For a clearer understanding of how these configuration values affect the output, you can refer to the [`PulseGen.xlsx`](./PulseGen.xlsx) spreadsheet.
       
 		   > **Important:** For step generators sharing the same timer, `MaxPulseFreq` and `MinDeltaCCR` must have identical values.
 
