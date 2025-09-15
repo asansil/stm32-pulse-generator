@@ -302,7 +302,7 @@ PulseGen_StatusTypeDef PulseGen_HalfPulseCallback(TIM_HandleTypeDef *htim, Pulse
 		    hPulseGen->PulseCount++;
 
 		    /* Stop counter if target Pulses reached (Only in generate Pulses mode) */
-		    if(hPulseGen->State == PULSEGEN_ACTIVE_COUNTING && hPulseGen->PulseCount == hPulseGen->TargetPulseCount){
+		    if(hPulseGen->State == PULSEGEN_ACTIVE_COUNTING && hPulseGen->PulseCount >= hPulseGen->TargetPulseCount){
 		    	PulseGen_Stop(hPulseGen);
 		    }
 		}
