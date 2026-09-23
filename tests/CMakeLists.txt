@@ -7,10 +7,11 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(unity)
 
-add_executable(test_smoke
-    test_smoke.c
+add_executable(test_init
+    test_init.c
+    mock_platform.c
 )
 
-target_link_libraries(test_smoke PRIVATE pulse_generator unity)
+target_link_libraries(test_init PRIVATE pulse_generator unity)
 
-add_test(NAME smoke COMMAND test_smoke)
+add_test(NAME init COMMAND test_init)
