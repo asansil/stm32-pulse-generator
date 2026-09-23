@@ -6,10 +6,14 @@ CMakeCache.txt
 CTestTestfile.cmake
 cmake_install.cmake
 compile_commands.json
+CMakeUserPresets.json
 
 # STM32 VS Code extension / STM32CubeCLT
 .vscode/
 cmake-build-*/
+
+# clangd
+.cache/
 
 #settings
 .settings/
