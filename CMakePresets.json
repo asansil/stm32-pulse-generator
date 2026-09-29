@@ -13,7 +13,7 @@
             "binaryDir": "${sourceDir}/build",
             "cacheVariables": {
                 "PULSEGEN_BUILD_TESTS": "ON",
-                "CMAKE_C_COMPILER": "C:/msys64/ucrt64/bin/gcc.exe"
+                "CMAKE_C_COMPILER": "gcc"
             }
         }
     ],
