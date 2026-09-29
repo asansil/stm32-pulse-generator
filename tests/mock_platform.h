@@ -14,6 +14,7 @@ typedef struct {
     const uint32_t *dma_buffer;
     size_t dma_len;
     bool gpio_state;
+    uint32_t timer_main_clk;
 } mock_platform_ctx_t;
 
 extern mock_platform_ctx_t g_mock_platform_ctx;

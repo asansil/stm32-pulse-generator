@@ -78,12 +78,11 @@ pulse_generator_status_t pulse_generator_stop(pulse_generator_t *pg)
     return status;
 }
 
-static uint32_t frequency_to_ccr(uint32_t frequency_hz)
+static uint32_t frequency_to_ccr(uint32_t timer_main_clk, uint32_t frequency_hz)
 {
-    /* Placeholder until M5: the platform doesn't expose the timer clock
-       yet, so ccr just echoes frequency_hz. Replace with a real Hz ->
-       timer-ticks conversion once real hardware exists. */
-    return frequency_hz;
+    /* Toggle mode: two compare matches (two toggles) make one full pulse,
+       so the compare period is half the pulse period. */
+    return timer_main_clk / (2 * frequency_hz);
 }
 
 pulse_generator_status_t pulse_generator_start_fixed_count(
@@ -108,8 +107,9 @@ pulse_generator_status_t pulse_generator_start_fixed_count(
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
+    uint32_t timer_main_clk = pg->platform->get_timer_main_clk(pg->platform->ctx);
     pulse_generator_status_t status =
-        pg->platform->set_compare(pg->platform->ctx, frequency_to_ccr(frequency_hz));
+        pg->platform->set_compare(pg->platform->ctx, frequency_to_ccr(timer_main_clk, frequency_hz));
     if (status != PULSE_GENERATOR_OK) {
         return status;
     }

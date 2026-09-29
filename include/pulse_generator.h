@@ -156,6 +156,19 @@ typedef struct {
     pulse_generator_status_t (*gpio_clear)(void *ctx);
 
     /**
+     * @brief Report the Output Compare timer's counting frequency, in Hz.
+     * @param ctx Opaque per-instance context.
+     * @return The timer's tick rate: how many times per second its counter
+     *         increments, i.e. the frequency already divided by the
+     *         prescaler. NOT the raw peripheral/bus clock (e.g. PCLK1) —
+     *         the library has no way to apply a prescaler on top of that
+     *         itself, so this must already be the post-prescaler counting
+     *         frequency. Used to convert a requested pulse frequency into
+     *         an Output Compare register value.
+     */
+    uint32_t (*get_timer_main_clk)(void *ctx);
+
+    /**
      * @brief Opaque pointer passed unchanged to every hook above. Typically
      *        holds whatever the integrator's HAL calls need to identify
      *        the concrete peripheral (timer handle, DMA channel, GPIO
