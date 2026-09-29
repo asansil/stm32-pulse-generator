@@ -10,7 +10,6 @@
 typedef struct {
     bool timer_running;
     uint32_t last_ccr;
-    uint32_t counter_value;
     bool dma_running;
     const uint32_t *dma_buffer;
     size_t dma_len;
