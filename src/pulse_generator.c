@@ -85,6 +85,22 @@ static uint32_t frequency_to_ccr(uint32_t timer_main_clk, uint32_t frequency_hz)
     return timer_main_clk / (2 * frequency_hz);
 }
 
+static pulse_generator_status_t apply_frequency(const pulse_generator_t *pg, uint32_t frequency_hz)
+{
+    uint32_t timer_main_clk = pg->platform->get_timer_main_clk(pg->platform->ctx);
+    return pg->platform->set_compare(pg->platform->ctx, frequency_to_ccr(timer_main_clk, frequency_hz));
+}
+
+static pulse_generator_status_t arm_timer(const pulse_generator_t *pg, uint32_t frequency_hz)
+{
+    pulse_generator_status_t status = apply_frequency(pg, frequency_hz);
+    if (status != PULSE_GENERATOR_OK) {
+        return status;
+    }
+
+    return pg->platform->timer_start(pg->platform->ctx);
+}
+
 pulse_generator_status_t pulse_generator_start_fixed_count(
     pulse_generator_t *pg,
     pulse_generator_backend_t backend,
@@ -107,14 +123,7 @@ pulse_generator_status_t pulse_generator_start_fixed_count(
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
-    uint32_t timer_main_clk = pg->platform->get_timer_main_clk(pg->platform->ctx);
-    pulse_generator_status_t status =
-        pg->platform->set_compare(pg->platform->ctx, frequency_to_ccr(timer_main_clk, frequency_hz));
-    if (status != PULSE_GENERATOR_OK) {
-        return status;
-    }
-
-    status = pg->platform->timer_start(pg->platform->ctx);
+    pulse_generator_status_t status = arm_timer(pg, frequency_hz);
     if (status != PULSE_GENERATOR_OK) {
         return status;
     }
@@ -124,6 +133,60 @@ pulse_generator_status_t pulse_generator_start_fixed_count(
     pg->target_pulse_count = pulse_count;
     pg->toggle_count = 0;
     pg->state = PULSE_GENERATOR_STATE_RUNNING;
+
+    return PULSE_GENERATOR_OK;
+}
+
+pulse_generator_status_t pulse_generator_start_continuous(
+    pulse_generator_t *pg,
+    pulse_generator_backend_t backend,
+    uint32_t frequency_hz)
+{
+    if (pg == NULL) {
+        return PULSE_GENERATOR_ERROR_INVALID_PARAM;
+    }
+
+    if (pg->state != PULSE_GENERATOR_STATE_IDLE) {
+        return PULSE_GENERATOR_ERROR_INVALID_STATE;
+    }
+
+    if (backend == PULSE_GENERATOR_BACKEND_BITBANG) {
+        return PULSE_GENERATOR_ERROR_INVALID_PARAM;
+    }
+
+    if (frequency_hz == 0) {
+        return PULSE_GENERATOR_ERROR_INVALID_PARAM;
+    }
+
+    pulse_generator_status_t status = arm_timer(pg, frequency_hz);
+    if (status != PULSE_GENERATOR_OK) {
+        return status;
+    }
+
+    pg->mode = PULSE_GENERATOR_MODE_CONTINUOUS_TIMER;
+    pg->frequency_hz = frequency_hz;
+    pg->toggle_count = 0;
+    pg->state = PULSE_GENERATOR_STATE_RUNNING;
+
+    return PULSE_GENERATOR_OK;
+}
+
+pulse_generator_status_t pulse_generator_set_frequency(pulse_generator_t *pg, uint32_t frequency_hz)
+{
+    if (pg == NULL || frequency_hz == 0) {
+        return PULSE_GENERATOR_ERROR_INVALID_PARAM;
+    }
+
+    if (pg->state != PULSE_GENERATOR_STATE_RUNNING || pg->mode != PULSE_GENERATOR_MODE_CONTINUOUS_TIMER) {
+        return PULSE_GENERATOR_ERROR_INVALID_STATE;
+    }
+
+    pulse_generator_status_t status = apply_frequency(pg, frequency_hz);
+    if (status != PULSE_GENERATOR_OK) {
+        return status;
+    }
+
+    pg->frequency_hz = frequency_hz;
 
     return PULSE_GENERATOR_OK;
 }
@@ -146,11 +209,17 @@ pulse_generator_status_t pulse_generator_notify_compare_match(pulse_generator_t 
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
-    if (pg->state != PULSE_GENERATOR_STATE_RUNNING || pg->mode != PULSE_GENERATOR_MODE_FIXED_COUNT_TIMER) {
+    if (pg->state != PULSE_GENERATOR_STATE_RUNNING ||
+        (pg->mode != PULSE_GENERATOR_MODE_FIXED_COUNT_TIMER &&
+         pg->mode != PULSE_GENERATOR_MODE_CONTINUOUS_TIMER)) {
         return PULSE_GENERATOR_OK;
     }
 
     pg->toggle_count++;
+
+    if (pg->mode == PULSE_GENERATOR_MODE_CONTINUOUS_TIMER) {
+        return PULSE_GENERATOR_OK;
+    }
 
     if (pg->toggle_count < pg->target_pulse_count * 2) {
         return PULSE_GENERATOR_OK;

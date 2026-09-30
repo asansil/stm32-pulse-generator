@@ -19,6 +19,9 @@ static pulse_generator_status_t mock_timer_stop(void *ctx)
 static pulse_generator_status_t mock_set_compare(void *ctx, uint32_t ccr)
 {
     mock_platform_ctx_t *mock_ctx = (mock_platform_ctx_t *)ctx;
+    if (mock_ctx->set_compare_result != PULSE_GENERATOR_OK) {
+        return mock_ctx->set_compare_result;
+    }
     mock_ctx->last_ccr = ccr;
     return PULSE_GENERATOR_OK;
 }
@@ -75,6 +78,7 @@ void mock_platform_reset(void)
 {
     g_mock_platform_ctx.timer_running = false;
     g_mock_platform_ctx.last_ccr = 0;
+    g_mock_platform_ctx.set_compare_result = PULSE_GENERATOR_OK;
     g_mock_platform_ctx.dma_running = false;
     g_mock_platform_ctx.dma_buffer = NULL;
     g_mock_platform_ctx.dma_len = 0;
