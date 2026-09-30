@@ -15,3 +15,12 @@ add_executable(test_init
 target_link_libraries(test_init PRIVATE pulse_generator unity)
 
 add_test(NAME init COMMAND test_init)
+
+add_executable(test_fixed_count
+    test_fixed_count.c
+    mock_platform.c
+)
+
+target_link_libraries(test_fixed_count PRIVATE pulse_generator unity)
+
+add_test(NAME fixed_count COMMAND test_fixed_count)

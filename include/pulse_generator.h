@@ -114,16 +114,6 @@ typedef struct {
     pulse_generator_status_t (*set_compare)(void *ctx, uint32_t ccr);
 
     /**
-     * @brief Read the current raw counter register value of the Output
-     *        Compare timer. Used by pulse_generator_tick() to detect
-     *        FIXED_COUNT_TIMER completion by polling.
-     * @param ctx Opaque per-instance context.
-     * @return Current counter value. A register read cannot fail, so
-     *         there is no error path here.
-     */
-    uint32_t (*get_counter)(void *ctx);
-
-    /**
      * @brief Start an asynchronous DMA burst over the given interval
      *        buffer.
      * @param ctx    Opaque per-instance context.
@@ -166,6 +156,19 @@ typedef struct {
     pulse_generator_status_t (*gpio_clear)(void *ctx);
 
     /**
+     * @brief Report the Output Compare timer's counting frequency, in Hz.
+     * @param ctx Opaque per-instance context.
+     * @return The timer's tick rate: how many times per second its counter
+     *         increments, i.e. the frequency already divided by the
+     *         prescaler. NOT the raw peripheral/bus clock (e.g. PCLK1) —
+     *         the library has no way to apply a prescaler on top of that
+     *         itself, so this must already be the post-prescaler counting
+     *         frequency. Used to convert a requested pulse frequency into
+     *         an Output Compare register value.
+     */
+    uint32_t (*get_timer_main_clk)(void *ctx);
+
+    /**
      * @brief Opaque pointer passed unchanged to every hook above. Typically
      *        holds whatever the integrator's HAL calls need to identify
      *        the concrete peripheral (timer handle, DMA channel, GPIO
@@ -189,10 +192,12 @@ typedef struct {
     const pulse_generator_platform_t *platform;
 
     pulse_generator_state_t state;
-    pulse_generator_mode_t  mode;              /* meaningful only while state == RUNNING */
+    pulse_generator_mode_t  mode;                   /* meaningful only while state == RUNNING */
     uint32_t                frequency_hz;
-    uint32_t                pulse_count;        /* cumulative, persists across movements until reset */
-    uint32_t                target_pulse_count; /* only meaningful for FIXED_COUNT modes */
+    uint32_t                toggle_count;           /* raw pin toggles observed via notify_compare_match()
+                                                         during the movement in progress; two toggles =
+                                                         one full pulse; always 0 while IDLE */
+    uint32_t                target_pulse_count;     /* only meaningful for FIXED_COUNT modes */
 
     pulse_generator_complete_cb_t complete_cb;
     void                          *complete_cb_user_ctx;
@@ -221,13 +226,17 @@ pulse_generator_status_t pulse_generator_init(
  * @param backend      Hardware mechanism to use (timer or bit-bang).
  * @param frequency_hz Pulse frequency, in Hz.
  * @param pulse_count  Exact number of pulses to generate.
- * @return PULSE_GENERATOR_OK on success, PULSE_GENERATOR_ERROR_INVALID_STATE
- *         if pg is not currently PULSE_GENERATOR_STATE_IDLE.
+ * @return PULSE_GENERATOR_OK on success, PULSE_GENERATOR_ERROR_INVALID_PARAM
+ *         if pg is NULL, if backend is PULSE_GENERATOR_BACKEND_BITBANG (not
+ *         yet supported), if frequency_hz is 0, or if pulse_count is 0;
+ *         PULSE_GENERATOR_ERROR_INVALID_STATE if pg is not currently
+ *         PULSE_GENERATOR_STATE_IDLE.
  * @note Non-blocking: returns immediately after arming the hardware.
  *       Completion is detected by pulse_generator_tick() and reported via
  *       the registered complete callback (see
  *       pulse_generator_set_complete_callback), and observable through
  *       pulse_generator_is_busy() / pulse_generator_get_state().
+ * @post pulse_count is reset to 0.
  */
 pulse_generator_status_t pulse_generator_start_fixed_count(
     pulse_generator_t *pg,
@@ -245,6 +254,7 @@ pulse_generator_status_t pulse_generator_start_fixed_count(
  * @return PULSE_GENERATOR_OK on success, PULSE_GENERATOR_ERROR_INVALID_STATE
  *         if pg is not currently PULSE_GENERATOR_STATE_IDLE.
  * @note Non-blocking: returns immediately after arming the hardware.
+ * @post pulse_count is reset to 0.
  */
 pulse_generator_status_t pulse_generator_start_continuous(
     pulse_generator_t *pg,
@@ -263,6 +273,7 @@ pulse_generator_status_t pulse_generator_start_continuous(
  *         if pg is not currently PULSE_GENERATOR_STATE_IDLE.
  * @note Non-blocking, and always uses the timer+DMA backend — there is no
  *       bit-bang variant of this mode.
+ * @post pulse_count is reset to 0.
  */
 pulse_generator_status_t pulse_generator_start_profile(
     pulse_generator_t *pg,
@@ -276,6 +287,7 @@ pulse_generator_status_t pulse_generator_start_profile(
  *         platform call failed.
  * @note Idempotent: calling this while already PULSE_GENERATOR_STATE_IDLE
  *       is a harmless no-op that returns PULSE_GENERATOR_OK.
+ * @note Also resets the pulse counter to 0 when transitioning to IDLE.
  */
 pulse_generator_status_t pulse_generator_stop(pulse_generator_t *pg);
 
@@ -298,9 +310,11 @@ pulse_generator_state_t pulse_generator_get_state(const pulse_generator_t *pg);
 /**
  * @brief Query the number of pulses generated so far.
  * @param pg Instance to query.
- * @return Cumulative pulse count since init or the last
- *         pulse_generator_reset_pulse_count() call. Not reset implicitly
- *         when a new movement starts.
+ * @return Number of full pulses generated during the movement currently
+ *         in progress. Always 0 while PULSE_GENERATOR_STATE_IDLE (a
+ *         movement resets it to 0 on start, and it returns to 0 again as
+ *         soon as it finishes or is stopped — read it before calling
+ *         pulse_generator_stop() if you need the final count).
  */
 uint32_t pulse_generator_get_pulse_count(const pulse_generator_t *pg);
 
@@ -342,21 +356,45 @@ pulse_generator_status_t pulse_generator_set_complete_callback(
     void *user_ctx);
 
 /**
- * @brief Periodic driver call for bit-bang timing and FIXED_COUNT_TIMER
- *        completion polling.
+ * @brief Periodic driver call for bit-bang timing.
  * @param pg         Instance to service.
  * @param elapsed_us Microseconds elapsed since the previous call to this
  *                    function for this instance (approximate is fine).
- * @return PULSE_GENERATOR_OK on success, an error code if an underlying
- *         platform call failed.
- * @note Safe to call regardless of pg's current mode/state: it is a no-op
- *       for PULSE_GENERATOR_MODE_CONTINUOUS_TIMER,
- *       PULSE_GENERATOR_MODE_DMA_PROFILE, and whenever pg is idle. The
- *       integrator is expected to call this periodically (e.g. from a
- *       general-purpose timer ISR or the main loop) whenever any instance
- *       might be using a bit-bang backend.
+ * @return PULSE_GENERATOR_OK on success, PULSE_GENERATOR_ERROR_INVALID_PARAM
+ *         if pg is NULL, an error code if an underlying platform call
+ *         failed.
+ * @note Safe to call regardless of pg's current mode/state. Currently a
+ *       no-op for every mode: bit-bang backends are not implemented yet
+ *       (see PULSE_GENERATOR_BACKEND_BITBANG). The integrator is expected
+ *       to call this periodically (e.g. from a general-purpose timer ISR
+ *       or the main loop) so that it is already wired in once bit-bang
+ *       support lands.
  */
 pulse_generator_status_t pulse_generator_tick(pulse_generator_t *pg, uint32_t elapsed_us);
+
+/**
+ * @brief Notify the library that the Output Compare timer's compare-match
+ *        interrupt has fired, toggling the pulse output pin.
+ * @param pg Instance to notify.
+ * @return PULSE_GENERATOR_OK on success, PULSE_GENERATOR_ERROR_INVALID_PARAM
+ *         if pg is NULL, an error code if an underlying platform call
+ *         failed.
+ * @note Must be called by the integrator from their own compare-match ISR,
+ *       once per interrupt. In Output Compare Toggle mode each compare
+ *       match only flips the pin, so two calls correspond to one full
+ *       pulse — the caller does not need to account for this, it is
+ *       handled internally.
+ * @note Safe to call regardless of pg's current mode/state: it is a no-op
+ *       whenever pg is not currently running in
+ *       PULSE_GENERATOR_MODE_FIXED_COUNT_TIMER (including a late/stray
+ *       call right after completion or an explicit stop()).
+ * @note When the target pulse count is reached, this stops the timer,
+ *       transitions pg to PULSE_GENERATOR_STATE_IDLE, resets the pulse
+ *       counter to 0, and invokes the registered complete callback (see
+ *       pulse_generator_set_complete_callback). May itself run in
+ *       interrupt context.
+ */
+pulse_generator_status_t pulse_generator_notify_compare_match(pulse_generator_t *pg);
 
 /**
  * @brief Notify the library that an in-progress DMA profile transfer has
