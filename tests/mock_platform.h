@@ -10,6 +10,7 @@
 typedef struct {
     bool timer_running;
     uint32_t last_ccr;
+    pulse_generator_status_t set_compare_result; /* returned by set_compare; tests set it to inject a failure */
     bool dma_running;
     const uint32_t *dma_buffer;
     size_t dma_len;

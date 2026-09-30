@@ -110,6 +110,10 @@ typedef struct {
      * @param ctx Opaque per-instance context.
      * @param ccr New compare register value.
      * @return PULSE_GENERATOR_OK on success, an error code otherwise.
+     * @note When called while the timer is running (hot frequency update),
+     *       the platform is responsible for applying the new value without
+     *       truncating or stretching the pulse in progress (e.g. by enabling
+     *       auto-reload preload on STM32 timers).
      */
     pulse_generator_status_t (*set_compare)(void *ctx, uint32_t ccr);
 
@@ -251,9 +255,14 @@ pulse_generator_status_t pulse_generator_start_fixed_count(
  * @param backend      Hardware mechanism to use (timer or bit-bang).
  * @param frequency_hz Initial pulse frequency, in Hz. May be changed while
  *                      running via pulse_generator_set_frequency().
- * @return PULSE_GENERATOR_OK on success, PULSE_GENERATOR_ERROR_INVALID_STATE
- *         if pg is not currently PULSE_GENERATOR_STATE_IDLE.
+ * @return PULSE_GENERATOR_OK on success, PULSE_GENERATOR_ERROR_INVALID_PARAM
+ *         if pg is NULL, if backend is PULSE_GENERATOR_BACKEND_BITBANG (not
+ *         yet supported), or if frequency_hz is 0;
+ *         PULSE_GENERATOR_ERROR_INVALID_STATE if pg is not currently
+ *         PULSE_GENERATOR_STATE_IDLE.
  * @note Non-blocking: returns immediately after arming the hardware.
+ *       Pulses are counted through pulse_generator_notify_compare_match();
+ *       the complete callback is never invoked in this mode.
  * @post pulse_count is reset to 0.
  */
 pulse_generator_status_t pulse_generator_start_continuous(
@@ -315,6 +324,8 @@ pulse_generator_state_t pulse_generator_get_state(const pulse_generator_t *pg);
  *         movement resets it to 0 on start, and it returns to 0 again as
  *         soon as it finishes or is stopped — read it before calling
  *         pulse_generator_stop() if you need the final count).
+ * @note In continuous modes the count wraps around to 0 after 2^31 pulses
+ *       (the underlying toggle counter is 32-bit).
  */
 uint32_t pulse_generator_get_pulse_count(const pulse_generator_t *pg);
 
@@ -331,10 +342,16 @@ void pulse_generator_reset_pulse_count(pulse_generator_t *pg);
  *        without stopping it or losing the accumulated pulse count.
  * @param pg           Instance to update.
  * @param frequency_hz New pulse frequency, in Hz.
- * @return PULSE_GENERATOR_OK on success,
+ * @return PULSE_GENERATOR_OK on success, PULSE_GENERATOR_ERROR_INVALID_PARAM
+ *         if pg is NULL or frequency_hz is 0;
  *         PULSE_GENERATOR_ERROR_INVALID_STATE if pg is not currently
  *         running in PULSE_GENERATOR_MODE_CONTINUOUS_TIMER or
- *         PULSE_GENERATOR_MODE_CONTINUOUS_BITBANG.
+ *         PULSE_GENERATOR_MODE_CONTINUOUS_BITBANG; the platform's error
+ *         code if set_compare failed, in which case the previous frequency
+ *         stays in effect and the movement keeps running with its pulse
+ *         count intact.
+ * @note Applied immediately through the platform's set_compare hook (see
+ *       its note on hot updates).
  */
 pulse_generator_status_t pulse_generator_set_frequency(pulse_generator_t *pg, uint32_t frequency_hz);
 
@@ -386,9 +403,13 @@ pulse_generator_status_t pulse_generator_tick(pulse_generator_t *pg, uint32_t el
  *       handled internally.
  * @note Safe to call regardless of pg's current mode/state: it is a no-op
  *       whenever pg is not currently running in
- *       PULSE_GENERATOR_MODE_FIXED_COUNT_TIMER (including a late/stray
+ *       PULSE_GENERATOR_MODE_FIXED_COUNT_TIMER or
+ *       PULSE_GENERATOR_MODE_CONTINUOUS_TIMER (including a late/stray
  *       call right after completion or an explicit stop()).
- * @note When the target pulse count is reached, this stops the timer,
+ * @note In PULSE_GENERATOR_MODE_CONTINUOUS_TIMER it only counts: it never
+ *       stops the timer nor invokes the complete callback.
+ * @note In PULSE_GENERATOR_MODE_FIXED_COUNT_TIMER, when the target pulse
+ *       count is reached, this stops the timer,
  *       transitions pg to PULSE_GENERATOR_STATE_IDLE, resets the pulse
  *       counter to 0, and invokes the registered complete callback (see
  *       pulse_generator_set_complete_callback). May itself run in
