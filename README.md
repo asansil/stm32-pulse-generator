@@ -16,7 +16,10 @@ fully testable on a host machine without hardware.
 - `src/` — implementation.
 - `tests/` — host unit tests (Unity + CTest), no hardware required.
 - `examples/` — reference firmware projects that exercise the library on
-  real hardware.
+  real hardware. Within each example, `Core/` is STM32CubeMX-owned
+  (regenerated from the `.ioc`, hand edits only inside `USER CODE`
+  blocks) and `App/` holds the hand-written integration code (e.g. the
+  real `pulse_generator_platform_t`), organized in cohesive subfolders.
 - `docs/` — reference material (frequency/resolution spreadsheet).
 
 ## Building and running the tests (host)

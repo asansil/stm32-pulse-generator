@@ -22,7 +22,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "pulse_generator_app.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -106,7 +106,7 @@ int main(void)
   MX_USB_HOST_Init();
   MX_TIM4_Init();
   /* USER CODE BEGIN 2 */
-
+  pulse_generator_app_init();
   /* USER CODE END 2 */
 
   /* Infinite loop */

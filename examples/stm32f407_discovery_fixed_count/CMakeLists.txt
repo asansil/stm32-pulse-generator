@@ -46,13 +46,15 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     ${CMAKE_CURRENT_SOURCE_DIR}/../../src/pulse_generator.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/pulse_generator_platform.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/App/pulse_generator/pulse_generator_platform.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/App/pulse_generator/pulse_generator_app.c
 )
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
     ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    ${CMAKE_CURRENT_SOURCE_DIR}/App/pulse_generator
 )
 
 # Add project symbols (macros)
