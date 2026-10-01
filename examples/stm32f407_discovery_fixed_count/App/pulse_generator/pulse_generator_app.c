@@ -13,9 +13,10 @@ void pulse_generator_app_init(void)
 {
     pulse_generator_init(&pg, &g_stm32f4_platform);
 
-    /* 1 kHz, 10 pulses on PD12/TIM4_CH1: easy to capture and count on a
-       logic analyzer triggered on the first rising edge. */
-    pulse_generator_start_fixed_count(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000, 10);
+    /* 25 kHz, 1000 pulses on PD12/TIM4_CH1: a compare interrupt every
+       20 us, close to the expected per-axis ceiling, to check that the
+       toggle ISR keeps up (missed_compare_count should stay 0). */
+    pulse_generator_start_fixed_count(&pg, PULSE_GENERATOR_BACKEND_TIMER, 25000, 1000);
 }
 
 void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
