@@ -1,2 +1,7 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Normalize all text files to LF in the repository and check them out as LF on
+# every platform. CubeMX writes LF, so this keeps generated sources from showing
+# up as modified on Windows, where core.autocrlf defaults to true.
+* text=auto eol=lf
+
+# Binary files are never converted.
+*.xlsx binary
