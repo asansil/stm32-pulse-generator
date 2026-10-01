@@ -21,6 +21,7 @@ typedef enum {
     PULSE_GENERATOR_ERROR_BUSY,          /* peripheral already running */
     PULSE_GENERATOR_ERROR_INVALID_PARAM, /* null pointer, bad config, etc. */
     PULSE_GENERATOR_ERROR_INVALID_STATE, /* operation not valid in current mode/state */
+    PULSE_GENERATOR_ERROR_MISSED_COMPARE, /* a compare match was serviced too late and had to be rescheduled */
 } pulse_generator_status_t;
 
 /* --- Modes and state --- */
@@ -86,14 +87,19 @@ typedef void (*pulse_generator_complete_cb_t)(void *user_ctx);
  */
 typedef struct {
     /**
-     * @brief Start the Output Compare timer, generating pulses according
-     *        to the last value passed to set_compare.
-     * @param ctx Opaque per-instance context (see ctx member below).
+     * @brief Start the Output Compare timer in free-running toggle mode:
+     *        the counter runs over its full range and the first compare
+     *        match is scheduled half_period_ticks after the current
+     *        counter value.
+     * @param ctx               Opaque per-instance context (see ctx member
+     *                          below).
+     * @param half_period_ticks Ticks until the first pin toggle. Never 0
+     *                          and never above get_max_ticks().
      * @return PULSE_GENERATOR_OK on success, an error code if the timer
      *         could not be started (e.g. PULSE_GENERATOR_ERROR_BUSY if
      *         already running).
      */
-    pulse_generator_status_t (*timer_start)(void *ctx);
+    pulse_generator_status_t (*timer_start)(void *ctx, uint32_t half_period_ticks);
 
     /**
      * @brief Stop the Output Compare timer immediately. No further pulses
@@ -104,18 +110,27 @@ typedef struct {
     pulse_generator_status_t (*timer_stop)(void *ctx);
 
     /**
-     * @brief Set the Output Compare register value that determines pulse
-     *        timing/frequency. May be called while the timer is running,
-     *        to support hot frequency updates.
-     * @param ctx Opaque per-instance context.
-     * @param ccr New compare register value.
-     * @return PULSE_GENERATOR_OK on success, an error code otherwise.
-     * @note When called while the timer is running (hot frequency update),
-     *       the platform is responsible for applying the new value without
-     *       truncating or stretching the pulse in progress (e.g. by enabling
-     *       auto-reload preload on STM32 timers).
+     * @brief Schedule the next compare match half_period_ticks after the
+     *        previous one (CCR += half_period_ticks, wrapping at the
+     *        counter's width).
+     * @param ctx               Opaque per-instance context.
+     * @param half_period_ticks Ticks until the next pin toggle, measured
+     *                          from the previous compare match rather than
+     *                          from now, so interrupt latency does not
+     *                          accumulate as drift. Same range as in
+     *                          timer_start.
+     * @return PULSE_GENERATOR_OK on success;
+     *         PULSE_GENERATOR_ERROR_MISSED_COMPARE if the counter had
+     *         already passed the new compare value when it was written
+     *         (the interrupt was serviced more than half_period_ticks
+     *         late). In that case the platform must reschedule the match
+     *         half_period_ticks after the current counter value, so the
+     *         output resumes after one late edge instead of after a full
+     *         counter wrap-around.
+     * @note Called by the library from pulse_generator_notify_compare_match(),
+     *       i.e. from interrupt context: must be short and non-blocking.
      */
-    pulse_generator_status_t (*set_compare)(void *ctx, uint32_t ccr);
+    pulse_generator_status_t (*advance_compare)(void *ctx, uint32_t half_period_ticks);
 
     /**
      * @brief Start an asynchronous DMA burst over the given interval
@@ -168,9 +183,18 @@ typedef struct {
      *         the library has no way to apply a prescaler on top of that
      *         itself, so this must already be the post-prescaler counting
      *         frequency. Used to convert a requested pulse frequency into
-     *         an Output Compare register value.
+     *         a half period in timer ticks.
      */
     uint32_t (*get_timer_main_clk)(void *ctx);
+
+    /**
+     * @brief Report the largest half_period_ticks the timer can schedule.
+     * @param ctx Opaque per-instance context.
+     * @return The counter's maximum value, e.g. 0xFFFF for a 16-bit timer
+     *         or 0xFFFFFFFF for a 32-bit one. Used to reject frequencies
+     *         too low to fit in the timer's range.
+     */
+    uint32_t (*get_max_ticks)(void *ctx);
 
     /**
      * @brief Opaque pointer passed unchanged to every hook above. Typically
@@ -197,7 +221,9 @@ typedef struct {
 
     pulse_generator_state_t state;
     pulse_generator_mode_t  mode;                   /* meaningful only while state == RUNNING */
-    uint32_t                frequency_hz;
+    uint32_t                half_period_ticks;      /* ticks between toggles, passed to advance_compare()
+                                                         on every compare match; meaningful only while
+                                                         state == RUNNING */
     uint32_t                toggle_count;           /* raw pin toggles observed via notify_compare_match()
                                                          during the movement in progress; two toggles =
                                                          one full pulse; always 0 while IDLE */
@@ -232,11 +258,12 @@ pulse_generator_status_t pulse_generator_init(
  * @param pulse_count  Exact number of pulses to generate.
  * @return PULSE_GENERATOR_OK on success, PULSE_GENERATOR_ERROR_INVALID_PARAM
  *         if pg is NULL, if backend is PULSE_GENERATOR_BACKEND_BITBANG (not
- *         yet supported), if frequency_hz is 0, or if pulse_count is 0;
+ *         yet supported), if frequency_hz is 0 or out of the timer's range
+ *         (see pulse_generator_set_frequency), or if pulse_count is 0;
  *         PULSE_GENERATOR_ERROR_INVALID_STATE if pg is not currently
  *         PULSE_GENERATOR_STATE_IDLE.
  * @note Non-blocking: returns immediately after arming the hardware.
- *       Completion is detected by pulse_generator_tick() and reported via
+ *       Completion is detected by pulse_generator_notify_compare_match() and reported via
  *       the registered complete callback (see
  *       pulse_generator_set_complete_callback), and observable through
  *       pulse_generator_is_busy() / pulse_generator_get_state().
@@ -257,7 +284,8 @@ pulse_generator_status_t pulse_generator_start_fixed_count(
  *                      running via pulse_generator_set_frequency().
  * @return PULSE_GENERATOR_OK on success, PULSE_GENERATOR_ERROR_INVALID_PARAM
  *         if pg is NULL, if backend is PULSE_GENERATOR_BACKEND_BITBANG (not
- *         yet supported), or if frequency_hz is 0;
+ *         yet supported), or if frequency_hz is 0 or out of the timer's
+ *         range (see pulse_generator_set_frequency);
  *         PULSE_GENERATOR_ERROR_INVALID_STATE if pg is not currently
  *         PULSE_GENERATOR_STATE_IDLE.
  * @note Non-blocking: returns immediately after arming the hardware.
@@ -343,15 +371,18 @@ void pulse_generator_reset_pulse_count(pulse_generator_t *pg);
  * @param pg           Instance to update.
  * @param frequency_hz New pulse frequency, in Hz.
  * @return PULSE_GENERATOR_OK on success, PULSE_GENERATOR_ERROR_INVALID_PARAM
- *         if pg is NULL or frequency_hz is 0;
+ *         if pg is NULL, if frequency_hz is 0, or if it is out of the
+ *         timer's range: its half period, timer_main_clk / (2 *
+ *         frequency_hz), must be at least 1 tick (frequency too high) and
+ *         at most get_max_ticks() (frequency too low);
  *         PULSE_GENERATOR_ERROR_INVALID_STATE if pg is not currently
  *         running in PULSE_GENERATOR_MODE_CONTINUOUS_TIMER or
- *         PULSE_GENERATOR_MODE_CONTINUOUS_BITBANG; the platform's error
- *         code if set_compare failed, in which case the previous frequency
- *         stays in effect and the movement keeps running with its pulse
- *         count intact.
- * @note Applied immediately through the platform's set_compare hook (see
- *       its note on hot updates).
+ *         PULSE_GENERATOR_MODE_CONTINUOUS_BITBANG. On any error the
+ *         previous frequency stays in effect.
+ * @note Does not touch the hardware: it only updates the half period the
+ *       library passes to advance_compare(), so the new frequency takes
+ *       effect from the next pin toggle on. The toggle already scheduled
+ *       keeps the old timing, hence no truncated or stretched half period.
  */
 pulse_generator_status_t pulse_generator_set_frequency(pulse_generator_t *pg, uint32_t frequency_hz);
 
@@ -394,8 +425,10 @@ pulse_generator_status_t pulse_generator_tick(pulse_generator_t *pg, uint32_t el
  *        interrupt has fired, toggling the pulse output pin.
  * @param pg Instance to notify.
  * @return PULSE_GENERATOR_OK on success, PULSE_GENERATOR_ERROR_INVALID_PARAM
- *         if pg is NULL, an error code if an underlying platform call
- *         failed.
+ *         if pg is NULL, PULSE_GENERATOR_ERROR_MISSED_COMPARE if
+ *         advance_compare() reported a late interrupt (the toggle is
+ *         still counted and the movement keeps running), or another
+ *         error code if an underlying platform call failed.
  * @note Must be called by the integrator from their own compare-match ISR,
  *       once per interrupt. In Output Compare Toggle mode each compare
  *       match only flips the pin, so two calls correspond to one full
@@ -406,8 +439,11 @@ pulse_generator_status_t pulse_generator_tick(pulse_generator_t *pg, uint32_t el
  *       PULSE_GENERATOR_MODE_FIXED_COUNT_TIMER or
  *       PULSE_GENERATOR_MODE_CONTINUOUS_TIMER (including a late/stray
  *       call right after completion or an explicit stop()).
- * @note In PULSE_GENERATOR_MODE_CONTINUOUS_TIMER it only counts: it never
- *       stops the timer nor invokes the complete callback.
+ * @note While running, each call schedules the next toggle through the
+ *       platform's advance_compare() hook, except for the final toggle of
+ *       a fixed-count movement.
+ * @note In PULSE_GENERATOR_MODE_CONTINUOUS_TIMER it never stops the timer
+ *       nor invokes the complete callback.
  * @note In PULSE_GENERATOR_MODE_FIXED_COUNT_TIMER, when the target pulse
  *       count is reached, this stops the timer,
  *       transitions pg to PULSE_GENERATOR_STATE_IDLE, resets the pulse

@@ -9,8 +9,12 @@
 
 typedef struct {
     bool timer_running;
-    uint32_t last_ccr;
-    pulse_generator_status_t set_compare_result; /* returned by set_compare; tests set it to inject a failure */
+    pulse_generator_status_t timer_start_result;         /* returned by timer_start; tests set it to inject a failure */
+    uint32_t start_ticks;                                /* half_period_ticks passed to the last timer_start */
+    int advance_compare_call_count;
+    uint32_t last_advance_ticks;
+    pulse_generator_status_t advance_compare_result;     /* returned by advance_compare; tests set it to inject a missed compare */
+    uint32_t max_ticks;                                  /* reported by get_max_ticks */
     bool dma_running;
     const uint32_t *dma_buffer;
     size_t dma_len;
