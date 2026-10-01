@@ -78,27 +78,54 @@ pulse_generator_status_t pulse_generator_stop(pulse_generator_t *pg)
     return status;
 }
 
-static uint32_t frequency_to_ccr(uint32_t timer_main_clk, uint32_t frequency_hz)
+/* Toggle mode: two compare matches (two toggles) make one full pulse, so
+   the time between toggles is half the pulse period. Dividing twice
+   instead of by (2 * frequency_hz) avoids overflowing the product. */
+static pulse_generator_status_t frequency_to_half_period_ticks(
+    const pulse_generator_t *pg,
+    uint32_t frequency_hz,
+    uint32_t *half_period_ticks)
 {
-    /* Toggle mode: two compare matches (two toggles) make one full pulse,
-       so the compare period is half the pulse period. */
-    return timer_main_clk / (2 * frequency_hz);
-}
+    if (frequency_hz == 0) {
+        return PULSE_GENERATOR_ERROR_INVALID_PARAM;
+    }
 
-static pulse_generator_status_t apply_frequency(const pulse_generator_t *pg, uint32_t frequency_hz)
-{
     uint32_t timer_main_clk = pg->platform->get_timer_main_clk(pg->platform->ctx);
-    return pg->platform->set_compare(pg->platform->ctx, frequency_to_ccr(timer_main_clk, frequency_hz));
+    uint32_t ticks = (timer_main_clk / 2) / frequency_hz;
+    if (ticks == 0 || ticks > pg->platform->get_max_ticks(pg->platform->ctx)) {
+        return PULSE_GENERATOR_ERROR_INVALID_PARAM;
+    }
+
+    *half_period_ticks = ticks;
+    return PULSE_GENERATOR_OK;
 }
 
-static pulse_generator_status_t arm_timer(const pulse_generator_t *pg, uint32_t frequency_hz)
+static pulse_generator_status_t start_timer_movement(
+    pulse_generator_t *pg,
+    pulse_generator_mode_t mode,
+    uint32_t frequency_hz)
 {
-    pulse_generator_status_t status = apply_frequency(pg, frequency_hz);
+    uint32_t half_period_ticks;
+    pulse_generator_status_t status = frequency_to_half_period_ticks(pg, frequency_hz, &half_period_ticks);
     if (status != PULSE_GENERATOR_OK) {
         return status;
     }
 
-    return pg->platform->timer_start(pg->platform->ctx);
+    /* Publish the movement before arming the hardware: with a short half
+       period the first compare-match interrupt can fire before
+       timer_start() returns, and notify_compare_match() must already see
+       the instance as RUNNING to schedule the next toggle. */
+    pg->mode = mode;
+    pg->half_period_ticks = half_period_ticks;
+    pg->toggle_count = 0;
+    pg->state = PULSE_GENERATOR_STATE_RUNNING;
+
+    status = pg->platform->timer_start(pg->platform->ctx, half_period_ticks);
+    if (status != PULSE_GENERATOR_OK) {
+        pg->state = PULSE_GENERATOR_STATE_IDLE;
+    }
+
+    return status;
 }
 
 pulse_generator_status_t pulse_generator_start_fixed_count(
@@ -119,22 +146,13 @@ pulse_generator_status_t pulse_generator_start_fixed_count(
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
-    if (frequency_hz == 0 || pulse_count == 0) {
+    if (pulse_count == 0) {
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
-    pulse_generator_status_t status = arm_timer(pg, frequency_hz);
-    if (status != PULSE_GENERATOR_OK) {
-        return status;
-    }
-
-    pg->mode = PULSE_GENERATOR_MODE_FIXED_COUNT_TIMER;
-    pg->frequency_hz = frequency_hz;
     pg->target_pulse_count = pulse_count;
-    pg->toggle_count = 0;
-    pg->state = PULSE_GENERATOR_STATE_RUNNING;
 
-    return PULSE_GENERATOR_OK;
+    return start_timer_movement(pg, PULSE_GENERATOR_MODE_FIXED_COUNT_TIMER, frequency_hz);
 }
 
 pulse_generator_status_t pulse_generator_start_continuous(
@@ -154,26 +172,12 @@ pulse_generator_status_t pulse_generator_start_continuous(
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
-    if (frequency_hz == 0) {
-        return PULSE_GENERATOR_ERROR_INVALID_PARAM;
-    }
-
-    pulse_generator_status_t status = arm_timer(pg, frequency_hz);
-    if (status != PULSE_GENERATOR_OK) {
-        return status;
-    }
-
-    pg->mode = PULSE_GENERATOR_MODE_CONTINUOUS_TIMER;
-    pg->frequency_hz = frequency_hz;
-    pg->toggle_count = 0;
-    pg->state = PULSE_GENERATOR_STATE_RUNNING;
-
-    return PULSE_GENERATOR_OK;
+    return start_timer_movement(pg, PULSE_GENERATOR_MODE_CONTINUOUS_TIMER, frequency_hz);
 }
 
 pulse_generator_status_t pulse_generator_set_frequency(pulse_generator_t *pg, uint32_t frequency_hz)
 {
-    if (pg == NULL || frequency_hz == 0) {
+    if (pg == NULL) {
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
@@ -181,12 +185,13 @@ pulse_generator_status_t pulse_generator_set_frequency(pulse_generator_t *pg, ui
         return PULSE_GENERATOR_ERROR_INVALID_STATE;
     }
 
-    pulse_generator_status_t status = apply_frequency(pg, frequency_hz);
+    uint32_t half_period_ticks;
+    pulse_generator_status_t status = frequency_to_half_period_ticks(pg, frequency_hz, &half_period_ticks);
     if (status != PULSE_GENERATOR_OK) {
         return status;
     }
 
-    pg->frequency_hz = frequency_hz;
+    pg->half_period_ticks = half_period_ticks;
 
     return PULSE_GENERATOR_OK;
 }
@@ -217,12 +222,9 @@ pulse_generator_status_t pulse_generator_notify_compare_match(pulse_generator_t 
 
     pg->toggle_count++;
 
-    if (pg->mode == PULSE_GENERATOR_MODE_CONTINUOUS_TIMER) {
-        return PULSE_GENERATOR_OK;
-    }
-
-    if (pg->toggle_count < pg->target_pulse_count * 2) {
-        return PULSE_GENERATOR_OK;
+    if (pg->mode == PULSE_GENERATOR_MODE_CONTINUOUS_TIMER ||
+        pg->toggle_count < pg->target_pulse_count * 2) {
+        return pg->platform->advance_compare(pg->platform->ctx, pg->half_period_ticks);
     }
 
     pulse_generator_status_t status = pg->platform->timer_stop(pg->platform->ctx);
