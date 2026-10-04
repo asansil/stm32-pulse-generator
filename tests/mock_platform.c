@@ -90,24 +90,6 @@ static pulse_generator_status_t mock_dma_stop(void *hw_ptr)
     return PULSE_GENERATOR_OK;
 }
 
-static pulse_generator_status_t mock_gpio_set(void *hw_ptr)
-{
-    mock_hw_t *hw = (mock_hw_t *)hw_ptr;
-
-    hw->gpio_state = true;
-
-    return PULSE_GENERATOR_OK;
-}
-
-static pulse_generator_status_t mock_gpio_clear(void *hw_ptr)
-{
-    mock_hw_t *hw = (mock_hw_t *)hw_ptr;
-
-    hw->gpio_state = false;
-
-    return PULSE_GENERATOR_OK;
-}
-
 const pulse_generator_ops_t g_mock_ops = {
     .channel_start   = mock_channel_start,
     .channel_stop    = mock_channel_stop,
@@ -117,8 +99,6 @@ const pulse_generator_ops_t g_mock_ops = {
     .get_counter_max = mock_get_counter_max,
     .dma_start       = mock_dma_start,
     .dma_stop        = mock_dma_stop,
-    .gpio_set        = mock_gpio_set,
-    .gpio_clear      = mock_gpio_clear,
 };
 
 const pulse_generator_ops_t g_mock_ops_minimal = {

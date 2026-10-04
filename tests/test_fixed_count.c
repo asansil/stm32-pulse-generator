@@ -67,7 +67,7 @@ static void test_start_fixed_count_when_idle_arms_hardware_and_returns_ok(void)
     init_instance(&pg, NULL);
 
     pulse_generator_status_t status =
-        pulse_generator_start_fixed_count(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000, 10);
+        pulse_generator_start_fixed_count(&pg, 1000, 10);
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, status);
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_RUNNING, pulse_generator_get_state(&pg));
@@ -82,27 +82,14 @@ static void test_start_fixed_count_when_already_running_returns_invalid_state(vo
 {
     pulse_generator_t pg;
     init_instance(&pg, NULL);
-    pulse_generator_start_fixed_count(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000, 10);
+    pulse_generator_start_fixed_count(&pg, 1000, 10);
 
     pulse_generator_status_t status =
-        pulse_generator_start_fixed_count(&pg, PULSE_GENERATOR_BACKEND_TIMER, 500, 5);
+        pulse_generator_start_fixed_count(&pg, 500, 5);
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_STATE, status);
     TEST_ASSERT_EQUAL(1, hw.channel_start_call_count);
     TEST_ASSERT_EQUAL_UINT32(1000, hw.first_compare);
-}
-
-static void test_start_fixed_count_with_bitbang_backend_is_not_supported(void)
-{
-    pulse_generator_t pg;
-    init_instance(&pg, NULL);
-
-    pulse_generator_status_t status =
-        pulse_generator_start_fixed_count(&pg, PULSE_GENERATOR_BACKEND_BITBANG, 1000, 10);
-
-    TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_NOT_SUPPORTED, status);
-    TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_IDLE, pulse_generator_get_state(&pg));
-    TEST_ASSERT_FALSE(hw.channel_running);
 }
 
 static void test_start_fixed_count_with_zero_frequency_is_rejected(void)
@@ -111,7 +98,7 @@ static void test_start_fixed_count_with_zero_frequency_is_rejected(void)
     init_instance(&pg, NULL);
 
     pulse_generator_status_t status =
-        pulse_generator_start_fixed_count(&pg, PULSE_GENERATOR_BACKEND_TIMER, 0, 10);
+        pulse_generator_start_fixed_count(&pg, 0, 10);
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, status);
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_IDLE, pulse_generator_get_state(&pg));
@@ -123,7 +110,7 @@ static void test_start_fixed_count_with_zero_pulse_count_is_rejected(void)
     init_instance(&pg, NULL);
 
     pulse_generator_status_t status =
-        pulse_generator_start_fixed_count(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000, 0);
+        pulse_generator_start_fixed_count(&pg, 1000, 0);
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, status);
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_IDLE, pulse_generator_get_state(&pg));
@@ -137,7 +124,7 @@ static void test_start_fixed_count_with_pulse_count_overflowing_the_edge_target_
     /* Two edges per pulse, so anything past half the range has no edge
        target that fits. */
     pulse_generator_status_t status =
-        pulse_generator_start_fixed_count(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000,
+        pulse_generator_start_fixed_count(&pg, 1000,
                                           UINT32_MAX / 2u + 1u);
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, status);
@@ -149,7 +136,7 @@ static void test_stop_during_running_movement_does_not_report_completion(void)
 {
     pulse_generator_t pg;
     init_instance(&pg, NULL);
-    pulse_generator_start_fixed_count(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000, 10);
+    pulse_generator_start_fixed_count(&pg, 1000, 10);
 
     pulse_generator_status_t status = pulse_generator_stop(&pg);
 
@@ -163,7 +150,7 @@ static void test_notify_compare_match_two_edges_count_as_one_pulse(void)
 {
     pulse_generator_t pg;
     init_instance(&pg, NULL);
-    pulse_generator_start_fixed_count(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000, 10);
+    pulse_generator_start_fixed_count(&pg, 1000, 10);
 
     mock_hw_fire_and_notify(&pg, &hw);
     TEST_ASSERT_EQUAL_UINT32(0, pulse_generator_get_pulse_count(&pg));
@@ -190,7 +177,7 @@ static void test_notify_compare_match_reaching_target_completes_movement(void)
     int dummy_user_ctx;
     pulse_generator_t pg;
     init_instance(&pg, &dummy_user_ctx);
-    pulse_generator_start_fixed_count(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000, 3);
+    pulse_generator_start_fixed_count(&pg, 1000, 3);
 
     for (int i = 0; i < 3 * 2; i++) {
         mock_hw_fire_and_notify(&pg, &hw);
@@ -207,7 +194,7 @@ static void test_completion_without_a_callback_is_harmless(void)
 {
     pulse_generator_t pg;
     pulse_generator_init(&pg, &(pulse_generator_config_t){ .ops = &g_mock_ops, .hw = &hw });
-    pulse_generator_start_fixed_count(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000, 1);
+    pulse_generator_start_fixed_count(&pg, 1000, 1);
 
     mock_hw_fire_and_notify(&pg, &hw);
     mock_hw_fire_and_notify(&pg, &hw);
@@ -220,7 +207,7 @@ static void test_reset_pulse_count_during_running_delays_completion(void)
 {
     pulse_generator_t pg;
     init_instance(&pg, NULL);
-    pulse_generator_start_fixed_count(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000, 2);
+    pulse_generator_start_fixed_count(&pg, 1000, 2);
 
     mock_hw_fire_and_notify(&pg, &hw);
     mock_hw_fire_and_notify(&pg, &hw);
@@ -247,7 +234,7 @@ static void test_get_pulse_count_is_zero_right_after_explicit_stop(void)
 {
     pulse_generator_t pg;
     init_instance(&pg, NULL);
-    pulse_generator_start_fixed_count(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000, 10);
+    pulse_generator_start_fixed_count(&pg, 1000, 10);
     mock_hw_fire_and_notify(&pg, &hw);
     mock_hw_fire_and_notify(&pg, &hw);
     TEST_ASSERT_EQUAL_UINT32(1, pulse_generator_get_pulse_count(&pg));
@@ -264,7 +251,7 @@ static void test_start_fixed_count_with_frequency_below_range_is_rejected(void)
 
     /* 2 MHz / (2 * 15 Hz) = 66666 ticks > 0xFFFF */
     pulse_generator_status_t status =
-        pulse_generator_start_fixed_count(&pg, PULSE_GENERATOR_BACKEND_TIMER, 15, 10);
+        pulse_generator_start_fixed_count(&pg, 15, 10);
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, status);
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_IDLE, pulse_generator_get_state(&pg));
@@ -278,7 +265,7 @@ static void test_start_fixed_count_with_frequency_above_range_is_rejected(void)
 
     /* 2 MHz / (2 * 2 MHz) = 0 ticks */
     pulse_generator_status_t status =
-        pulse_generator_start_fixed_count(&pg, PULSE_GENERATOR_BACKEND_TIMER, 2000000, 10);
+        pulse_generator_start_fixed_count(&pg, 2000000, 10);
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, status);
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_IDLE, pulse_generator_get_state(&pg));
@@ -289,7 +276,7 @@ static void test_notify_compare_match_schedules_next_edge(void)
 {
     pulse_generator_t pg;
     init_instance(&pg, NULL);
-    pulse_generator_start_fixed_count(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000, 10);
+    pulse_generator_start_fixed_count(&pg, 1000, 10);
 
     mock_hw_fire_and_notify(&pg, &hw);
 
@@ -304,7 +291,7 @@ static void test_final_edge_does_not_schedule_another(void)
 {
     pulse_generator_t pg;
     init_instance(&pg, NULL);
-    pulse_generator_start_fixed_count(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000, 3);
+    pulse_generator_start_fixed_count(&pg, 1000, 3);
 
     for (int i = 0; i < 3 * 2; i++) {
         mock_hw_fire_and_notify(&pg, &hw);
@@ -321,7 +308,6 @@ int main(void)
     RUN_TEST(test_stop_when_idle_is_idempotent);
     RUN_TEST(test_start_fixed_count_when_idle_arms_hardware_and_returns_ok);
     RUN_TEST(test_start_fixed_count_when_already_running_returns_invalid_state);
-    RUN_TEST(test_start_fixed_count_with_bitbang_backend_is_not_supported);
     RUN_TEST(test_start_fixed_count_with_zero_frequency_is_rejected);
     RUN_TEST(test_start_fixed_count_with_zero_pulse_count_is_rejected);
     RUN_TEST(test_start_fixed_count_with_pulse_count_overflowing_the_edge_target_is_rejected);

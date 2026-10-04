@@ -43,7 +43,7 @@ static void test_start_continuous_when_idle_arms_hardware_and_returns_ok(void)
     init_instance(&pg);
 
     pulse_generator_status_t status =
-        pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000);
+        pulse_generator_start_continuous(&pg, 1000);
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, status);
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_RUNNING, pulse_generator_get_state(&pg));
@@ -54,7 +54,7 @@ static void test_start_continuous_when_idle_arms_hardware_and_returns_ok(void)
 static void test_start_continuous_with_null_pg_returns_invalid_param(void)
 {
     pulse_generator_status_t status =
-        pulse_generator_start_continuous(NULL, PULSE_GENERATOR_BACKEND_TIMER, 1000);
+        pulse_generator_start_continuous(NULL, 1000);
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, status);
 }
@@ -63,27 +63,14 @@ static void test_start_continuous_when_already_running_returns_invalid_state(voi
 {
     pulse_generator_t pg;
     init_instance(&pg);
-    pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000);
+    pulse_generator_start_continuous(&pg, 1000);
 
     pulse_generator_status_t status =
-        pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 500);
+        pulse_generator_start_continuous(&pg, 500);
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_STATE, status);
     TEST_ASSERT_EQUAL(1, hw.channel_start_call_count);
     TEST_ASSERT_EQUAL_UINT32(1000, hw.first_compare);
-}
-
-static void test_start_continuous_with_bitbang_backend_is_not_supported(void)
-{
-    pulse_generator_t pg;
-    init_instance(&pg);
-
-    pulse_generator_status_t status =
-        pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_BITBANG, 1000);
-
-    TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_NOT_SUPPORTED, status);
-    TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_IDLE, pulse_generator_get_state(&pg));
-    TEST_ASSERT_FALSE(hw.channel_running);
 }
 
 static void test_start_continuous_with_zero_frequency_is_rejected(void)
@@ -92,7 +79,7 @@ static void test_start_continuous_with_zero_frequency_is_rejected(void)
     init_instance(&pg);
 
     pulse_generator_status_t status =
-        pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 0);
+        pulse_generator_start_continuous(&pg, 0);
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, status);
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_IDLE, pulse_generator_get_state(&pg));
@@ -103,7 +90,7 @@ static void test_notify_compare_match_counts_pulses_without_auto_stop(void)
 {
     pulse_generator_t pg;
     init_instance(&pg);
-    pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000);
+    pulse_generator_start_continuous(&pg, 1000);
 
     for (int i = 0; i < 100 * 2; i++) {
         mock_hw_fire_and_notify(&pg, &hw);
@@ -124,7 +111,7 @@ static void test_set_frequency_applies_new_half_period_from_next_edge(void)
 {
     pulse_generator_t pg;
     init_instance(&pg);
-    pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000);
+    pulse_generator_start_continuous(&pg, 1000);
     int tick_hz_reads_after_start = hw.get_tick_hz_call_count;
 
     pulse_generator_status_t status = pulse_generator_set_frequency(&pg, 2000);
@@ -147,7 +134,7 @@ static void test_set_frequency_preserves_pulse_count(void)
 {
     pulse_generator_t pg;
     init_instance(&pg);
-    pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000);
+    pulse_generator_start_continuous(&pg, 1000);
     for (int i = 0; i < 3 * 2; i++) {
         mock_hw_fire_and_notify(&pg, &hw);
     }
@@ -175,7 +162,7 @@ static void test_set_frequency_during_fixed_count_returns_invalid_state(void)
 {
     pulse_generator_t pg;
     init_instance(&pg);
-    pulse_generator_start_fixed_count(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000, 10);
+    pulse_generator_start_fixed_count(&pg, 1000, 10);
 
     pulse_generator_status_t status = pulse_generator_set_frequency(&pg, 2000);
 
@@ -188,7 +175,7 @@ static void test_set_frequency_with_zero_frequency_is_rejected(void)
 {
     pulse_generator_t pg;
     init_instance(&pg);
-    pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000);
+    pulse_generator_start_continuous(&pg, 1000);
 
     pulse_generator_status_t status = pulse_generator_set_frequency(&pg, 0);
 
@@ -210,7 +197,7 @@ static void test_a_late_interrupt_is_reported_and_the_movement_keeps_running(voi
 {
     pulse_generator_t pg;
     init_instance(&pg);
-    pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000);
+    pulse_generator_start_continuous(&pg, 1000);
     mock_hw_fire_and_notify(&pg, &hw);
 
     /* A full half period of interrupt latency: by the time the library writes
@@ -234,7 +221,7 @@ static void test_stop_during_continuous_stops_channel_and_resets_count(void)
 {
     pulse_generator_t pg;
     init_instance(&pg);
-    pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000);
+    pulse_generator_start_continuous(&pg, 1000);
     mock_hw_fire_and_notify(&pg, &hw);
     mock_hw_fire_and_notify(&pg, &hw);
 
@@ -253,9 +240,9 @@ static void test_start_continuous_with_frequency_out_of_range_is_rejected(void)
     init_instance(&pg);
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM,
-                      pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 15));
+                      pulse_generator_start_continuous(&pg, 15));
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM,
-                      pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 2000000));
+                      pulse_generator_start_continuous(&pg, 2000000));
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_IDLE, pulse_generator_get_state(&pg));
     TEST_ASSERT_FALSE(hw.channel_running);
 }
@@ -271,7 +258,7 @@ static void test_start_continuous_at_the_counter_maximum_is_accepted(void)
     init_instance(&pg);
 
     pulse_generator_status_t status =
-        pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1);
+        pulse_generator_start_continuous(&pg, 1);
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, status);
     TEST_ASSERT_EQUAL_UINT32(255, hw.first_compare);
@@ -284,7 +271,7 @@ static void test_start_continuous_at_one_tick_is_accepted(void)
 
     /* 2 MHz / (2 * 1 MHz) = 1 tick */
     pulse_generator_status_t status =
-        pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000000);
+        pulse_generator_start_continuous(&pg, 1000000);
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, status);
     TEST_ASSERT_EQUAL_UINT32(1, hw.first_compare);
@@ -294,7 +281,7 @@ static void test_set_frequency_out_of_range_is_rejected_and_keeps_previous(void)
 {
     pulse_generator_t pg;
     init_instance(&pg);
-    pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000);
+    pulse_generator_start_continuous(&pg, 1000);
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, pulse_generator_set_frequency(&pg, 15));
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, pulse_generator_set_frequency(&pg, 2000000));
@@ -310,7 +297,7 @@ static void test_start_continuous_when_channel_start_fails_stays_idle(void)
     hw.channel_start_result = PULSE_GENERATOR_ERROR;
 
     pulse_generator_status_t status =
-        pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000);
+        pulse_generator_start_continuous(&pg, 1000);
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR, status);
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_IDLE, pulse_generator_get_state(&pg));
@@ -326,7 +313,6 @@ int main(void)
     RUN_TEST(test_start_continuous_when_idle_arms_hardware_and_returns_ok);
     RUN_TEST(test_start_continuous_with_null_pg_returns_invalid_param);
     RUN_TEST(test_start_continuous_when_already_running_returns_invalid_state);
-    RUN_TEST(test_start_continuous_with_bitbang_backend_is_not_supported);
     RUN_TEST(test_start_continuous_with_zero_frequency_is_rejected);
     RUN_TEST(test_notify_compare_match_counts_pulses_without_auto_stop);
     RUN_TEST(test_set_frequency_applies_new_half_period_from_next_edge);

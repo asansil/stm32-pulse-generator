@@ -114,7 +114,7 @@ static void test_init_clears_state_left_by_a_previous_movement(void)
 {
     pulse_generator_t pg;
     pulse_generator_init(&pg, &(pulse_generator_config_t){ .ops = &g_mock_ops, .hw = &hw });
-    pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000);
+    pulse_generator_start_continuous(&pg, 1000);
     mock_hw_fire_and_notify(&pg, &hw);
     mock_hw_fire_and_notify(&pg, &hw);
 

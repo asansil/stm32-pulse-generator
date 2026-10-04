@@ -219,7 +219,6 @@ static pulse_generator_status_t start_timer_movement(
 
 pulse_generator_status_t pulse_generator_start_fixed_count(
     pulse_generator_t *pg,
-    pulse_generator_backend_t backend,
     uint32_t frequency_hz,
     uint32_t pulse_count)
 {
@@ -231,23 +230,18 @@ pulse_generator_status_t pulse_generator_start_fixed_count(
         return PULSE_GENERATOR_ERROR_INVALID_STATE;
     }
 
-    if (backend == PULSE_GENERATOR_BACKEND_BITBANG) {
-        return PULSE_GENERATOR_ERROR_NOT_SUPPORTED;
-    }
-
     /* Each pulse is two compare matches, so the edge target would overflow
        past half the range. */
     if (pulse_count == 0 || pulse_count > UINT32_MAX / 2u) {
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
-    return start_timer_movement(pg, PULSE_GENERATOR_MODE_FIXED_COUNT_TIMER,
+    return start_timer_movement(pg, PULSE_GENERATOR_MODE_FIXED_COUNT,
                                 frequency_hz, pulse_count * 2u);
 }
 
 pulse_generator_status_t pulse_generator_start_continuous(
     pulse_generator_t *pg,
-    pulse_generator_backend_t backend,
     uint32_t frequency_hz)
 {
     if (pg == NULL) {
@@ -258,12 +252,8 @@ pulse_generator_status_t pulse_generator_start_continuous(
         return PULSE_GENERATOR_ERROR_INVALID_STATE;
     }
 
-    if (backend == PULSE_GENERATOR_BACKEND_BITBANG) {
-        return PULSE_GENERATOR_ERROR_NOT_SUPPORTED;
-    }
-
     /* No edge target: runs until stop(). */
-    return start_timer_movement(pg, PULSE_GENERATOR_MODE_CONTINUOUS_TIMER, frequency_hz, 0);
+    return start_timer_movement(pg, PULSE_GENERATOR_MODE_CONTINUOUS, frequency_hz, 0);
 }
 
 pulse_generator_status_t pulse_generator_start_profile(
@@ -278,7 +268,7 @@ pulse_generator_status_t pulse_generator_start_profile(
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
-    /* Not implemented until the DMA profile mode exists (M10). */
+    /* A placeholder the scheduled mode (M8) replaces rather than fills in. */
     return PULSE_GENERATOR_ERROR_NOT_SUPPORTED;
 }
 
@@ -288,7 +278,7 @@ pulse_generator_status_t pulse_generator_set_frequency(pulse_generator_t *pg, ui
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
-    if (pg->state != PULSE_GENERATOR_STATE_RUNNING || pg->mode != PULSE_GENERATOR_MODE_CONTINUOUS_TIMER) {
+    if (pg->state != PULSE_GENERATOR_STATE_RUNNING || pg->mode != PULSE_GENERATOR_MODE_CONTINUOUS) {
         return PULSE_GENERATOR_ERROR_INVALID_STATE;
     }
 
@@ -303,18 +293,6 @@ pulse_generator_status_t pulse_generator_set_frequency(pulse_generator_t *pg, ui
     return PULSE_GENERATOR_OK;
 }
 
-pulse_generator_status_t pulse_generator_tick(pulse_generator_t *pg, uint32_t elapsed_us)
-{
-    (void)elapsed_us;
-
-    if (pg == NULL) {
-        return PULSE_GENERATOR_ERROR_INVALID_PARAM;
-    }
-
-    /* No-op until bit-bang backends exist (M8). */
-    return PULSE_GENERATOR_OK;
-}
-
 pulse_generator_status_t pulse_generator_notify_compare_match(pulse_generator_t *pg)
 {
     if (pg == NULL) {
@@ -322,8 +300,8 @@ pulse_generator_status_t pulse_generator_notify_compare_match(pulse_generator_t 
     }
 
     if (pg->state != PULSE_GENERATOR_STATE_RUNNING ||
-        (pg->mode != PULSE_GENERATOR_MODE_FIXED_COUNT_TIMER &&
-         pg->mode != PULSE_GENERATOR_MODE_CONTINUOUS_TIMER)) {
+        (pg->mode != PULSE_GENERATOR_MODE_FIXED_COUNT &&
+         pg->mode != PULSE_GENERATOR_MODE_CONTINUOUS)) {
         return PULSE_GENERATOR_OK;
     }
 
@@ -353,6 +331,6 @@ pulse_generator_status_t pulse_generator_notify_dma_complete(pulse_generator_t *
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
-    /* Not implemented until the DMA profile mode exists (M10). */
+    /* A placeholder the scheduled mode (M8) replaces rather than fills in. */
     return PULSE_GENERATOR_ERROR_NOT_SUPPORTED;
 }

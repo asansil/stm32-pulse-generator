@@ -45,7 +45,6 @@ typedef struct {
     bool            dma_running;
     const uint32_t *dma_buffer;
     size_t          dma_len;
-    bool            gpio_state;
 } mock_hw_t;
 
 /** Every hook implemented. */

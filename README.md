@@ -6,9 +6,20 @@
 > `main`.
 
 HAL-independent C library for generating pulses on a pin using a timer in
-Output Compare / Toggle mode, plus bit-banging fallback modes. Designed to
-be portable across MCUs through a platform abstraction layer, and to be
-fully testable on a host machine without hardware.
+Output Compare / Toggle mode. Designed to be portable across MCUs through a
+platform abstraction layer, and to be fully testable on a host machine
+without hardware.
+
+Three generation modes share that one mechanism and differ only in how the
+instants of the pin toggles are decided:
+
+- **Fixed count** — exactly N pulses at a fixed frequency, stopping on its
+  own.
+- **Continuous** — pulses at a frequency that can be updated on the fly,
+  until explicitly stopped.
+- **Scheduled** — an arbitrary sequence of pulses at caller-specified
+  instants, streamed through a queue so the sequence need never be held in
+  memory in full. *(In design; see the roadmap.)*
 
 ## Repository layout
 

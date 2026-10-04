@@ -28,19 +28,15 @@ typedef enum {
 /* --- Modes and state --- */
 
 /**
- * @brief Pulse pattern and hardware backend an instance is currently
- *        configured to generate.
+ * @brief Pulse pattern an instance is currently configured to generate.
  *
- * Flattened on purpose instead of two orthogonal pattern/backend enums:
- * DMA_PROFILE has no bit-bang variant, so that invalid combination simply
- * has no value here to represent it, instead of being rejected at runtime.
+ * Every mode is driven by the same hardware mechanism, an Output Compare
+ * channel in toggle mode; they differ only in how the instants of the
+ * toggles are decided.
  */
 typedef enum {
-    PULSE_GENERATOR_MODE_FIXED_COUNT_TIMER,   /* Output Compare, N pulses, auto-stop */
-    PULSE_GENERATOR_MODE_FIXED_COUNT_BITBANG, /* GPIO toggling, N pulses, auto-stop */
-    PULSE_GENERATOR_MODE_CONTINUOUS_TIMER,    /* Output Compare, runs until stop() */
-    PULSE_GENERATOR_MODE_CONTINUOUS_BITBANG,  /* GPIO toggling, runs until stop() */
-    PULSE_GENERATOR_MODE_DMA_PROFILE,         /* DMA burst over a precomputed buffer */
+    PULSE_GENERATOR_MODE_FIXED_COUNT, /* N pulses at a fixed frequency, auto-stop */
+    PULSE_GENERATOR_MODE_CONTINUOUS,  /* fixed frequency, runs until stop() */
 } pulse_generator_mode_t;
 
 /**
@@ -50,16 +46,6 @@ typedef enum {
     PULSE_GENERATOR_STATE_IDLE,    /* no movement in progress */
     PULSE_GENERATOR_STATE_RUNNING, /* a movement is currently in progress */
 } pulse_generator_state_t;
-
-/**
- * @brief Hardware mechanism used to drive a FIXED_COUNT or CONTINUOUS
- *        movement. Not applicable to DMA_PROFILE, which is always
- *        timer+DMA driven.
- */
-typedef enum {
-    PULSE_GENERATOR_BACKEND_TIMER,   /* Output Compare timer */
-    PULSE_GENERATOR_BACKEND_BITBANG, /* manual GPIO toggling, driven by pulse_generator_tick() */
-} pulse_generator_backend_t;
 
 /* --- Events --- */
 
@@ -116,7 +102,7 @@ typedef void (*pulse_generator_event_cb_t)(pulse_generator_t *pg,
  * The table holds no per-instance data: every hook takes an opaque `hw`
  * pointer saying which output to act on, so one const table in flash serves
  * every channel of a platform, and a single firmware can mix platforms
- * (timer, bit-bang, mock) without duplicating it.
+ * (a real timer and a mock, say) without duplicating it.
  *
  * The hooks are deliberately dumb register accessors. All the arithmetic —
  * converting a frequency to ticks, where the next compare value lands,
@@ -237,25 +223,6 @@ typedef struct {
      * @note Optional hook, see dma_start.
      */
     pulse_generator_status_t (*dma_stop)(void *hw);
-
-    /**
-     * @brief Drive the pulse output pin high. Only used by the bit-bang
-     *        backend, invoked from pulse_generator_tick().
-     * @param hw Opaque per-output handle.
-     * @return PULSE_GENERATOR_OK on success, an error code otherwise.
-     * @note Optional hook: leave it NULL on a platform that only drives the
-     *       timer backend.
-     */
-    pulse_generator_status_t (*gpio_set)(void *hw);
-
-    /**
-     * @brief Drive the pulse output pin low. Only used by the bit-bang
-     *        backend, invoked from pulse_generator_tick().
-     * @param hw Opaque per-output handle.
-     * @return PULSE_GENERATOR_OK on success, an error code otherwise.
-     * @note Optional hook, see gpio_set.
-     */
-    pulse_generator_status_t (*gpio_clear)(void *hw);
 } pulse_generator_ops_t;
 
 /* --- Configuration --- */
@@ -356,7 +323,6 @@ pulse_generator_status_t pulse_generator_init(
  * @brief Start a movement of exactly pulse_count pulses at a fixed
  *        frequency, stopping itself when the last one has been emitted.
  * @param pg          Instance.
- * @param backend     Hardware mechanism to drive the pulses with.
  * @param frequency_hz Pulse frequency in Hz. Must map to a half period
  *                    between 1 tick and the counter's maximum, given the
  *                    platform's tick rate.
@@ -368,8 +334,6 @@ pulse_generator_status_t pulse_generator_init(
  *         PULSE_GENERATOR_ERROR_INVALID_PARAM on a null instance, an out of
  *         range frequency or pulse count, or a platform reporting a counter
  *         maximum that is not of the form 2^n - 1;
- *         PULSE_GENERATOR_ERROR_NOT_SUPPORTED if the backend is not
- *         implemented yet or the platform lacks the hooks it needs;
  *         otherwise whatever the platform returned while being armed, with
  *         the instance left IDLE.
  * @note Returns as soon as the hardware is armed: the pulses are emitted in
@@ -378,7 +342,6 @@ pulse_generator_status_t pulse_generator_init(
  */
 pulse_generator_status_t pulse_generator_start_fixed_count(
     pulse_generator_t *pg,
-    pulse_generator_backend_t backend,
     uint32_t frequency_hz,
     uint32_t pulse_count);
 
@@ -386,7 +349,6 @@ pulse_generator_status_t pulse_generator_start_fixed_count(
  * @brief Start an open-ended movement at a fixed frequency, running until
  *        pulse_generator_stop() is called.
  * @param pg           Instance.
- * @param backend      Hardware mechanism to drive the pulses with.
  * @param frequency_hz Pulse frequency in Hz, same range as in
  *                     pulse_generator_start_fixed_count(). Can be changed
  *                     while running with pulse_generator_set_frequency().
@@ -398,21 +360,21 @@ pulse_generator_status_t pulse_generator_start_fixed_count(
  */
 pulse_generator_status_t pulse_generator_start_continuous(
     pulse_generator_t *pg,
-    pulse_generator_backend_t backend,
     uint32_t frequency_hz);
 
 /**
- * @brief Start a variable-frequency movement over a precomputed buffer,
- *        driven by DMA without CPU work per pulse.
+ * @brief Start a variable-frequency movement over a precomputed buffer.
  * @param pg        Instance.
  * @param intervals Precomputed buffer. Ownership and lifetime stay with the
  *                  caller, which must keep it unmodified until the transfer
  *                  ends.
  * @param len       Number of elements in intervals.
- * @return PULSE_GENERATOR_ERROR_NOT_SUPPORTED: the DMA profile mode is not
- *         implemented yet (M10). The buffer's contract is still open — with
- *         a free-running counter the DMA feeds absolute compare values, not
- *         intervals — so callers must not depend on this signature yet.
+ * @return PULSE_GENERATOR_ERROR_NOT_SUPPORTED: always.
+ * @deprecated A placeholder with no implementation behind it. The scheduled
+ *             mode (M8) replaces it with a streaming event queue, of which a
+ *             precomputed buffer is just the case where the queue is filled
+ *             once, so this signature will be removed rather than
+ *             implemented. Callers must not depend on it.
  */
 pulse_generator_status_t pulse_generator_start_profile(
     pulse_generator_t *pg,
@@ -491,19 +453,6 @@ void pulse_generator_reset_pulse_count(pulse_generator_t *pg);
 pulse_generator_status_t pulse_generator_set_frequency(pulse_generator_t *pg, uint32_t frequency_hz);
 
 /**
- * @brief Drive a bit-bang movement forward.
- * @param pg         Instance.
- * @param elapsed_us Microseconds elapsed since the previous call.
- * @return PULSE_GENERATOR_OK; PULSE_GENERATOR_ERROR_INVALID_PARAM on a null
- *         instance.
- * @note Must be called periodically by the integrator while a bit-bang
- *       movement is in progress, and is a no-op for every timer-driven mode.
- *       Currently a no-op in all cases: the bit-bang backends are not
- *       implemented yet (M8).
- */
-pulse_generator_status_t pulse_generator_tick(pulse_generator_t *pg, uint32_t elapsed_us);
-
-/**
  * @brief Report a compare match to the library, from the integrator's timer
  *        ISR.
  * @param pg Instance owning the channel whose match fired.
@@ -526,8 +475,11 @@ pulse_generator_status_t pulse_generator_notify_compare_match(pulse_generator_t 
  * @brief Report the end of a DMA burst to the library, from the
  *        integrator's DMA ISR.
  * @param pg Instance.
- * @return PULSE_GENERATOR_ERROR_NOT_SUPPORTED: the DMA profile mode is not
- *         implemented yet (M10).
+ * @return PULSE_GENERATOR_ERROR_NOT_SUPPORTED: always.
+ * @deprecated Counterpart of pulse_generator_start_profile(), and removed
+ *             with it when the scheduled mode arrives: a streaming queue
+ *             needs to hear about half transfers too, so the notification
+ *             is reworked rather than kept.
  */
 pulse_generator_status_t pulse_generator_notify_dma_complete(pulse_generator_t *pg);
 

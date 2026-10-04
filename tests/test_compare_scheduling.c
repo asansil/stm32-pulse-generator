@@ -44,7 +44,7 @@ static void test_first_compare_is_half_a_period_past_the_current_counter(void)
     hw.counter = 5000;
     init_instance(&pg);
 
-    pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000);
+    pulse_generator_start_continuous(&pg, 1000);
 
     TEST_ASSERT_EQUAL_UINT32(6000, hw.first_compare);
 }
@@ -55,7 +55,7 @@ static void test_first_compare_wraps_at_the_counter_width(void)
     hw.counter = 0xFFC0;
     init_instance(&pg);
 
-    pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000);
+    pulse_generator_start_continuous(&pg, 1000);
 
     /* 0xFFC0 + 1000 = 0x103A8, which must come out as 0x03A8 on a 16-bit
        counter rather than as a value the register cannot hold. */
@@ -67,7 +67,7 @@ static void test_compares_keep_their_spacing_across_the_counter_wrap(void)
     pulse_generator_t pg;
     hw.counter = 0xFF00;
     init_instance(&pg);
-    pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000);
+    pulse_generator_start_continuous(&pg, 1000);
 
     uint32_t previous = hw.first_compare;
     for (int edge = 0; edge < 200; edge++) {
@@ -90,7 +90,7 @@ static void test_compares_wrap_on_a_32_bit_counter(void)
     hw.counter = 0xFFFFFF00;
     init_instance(&pg);
 
-    pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000);
+    pulse_generator_start_continuous(&pg, 1000);
 
     /* 0xFFFFFF00 + 1000 = 0x1000002E8, i.e. 744 once wrapped. */
     TEST_ASSERT_EQUAL_UINT32(744, hw.first_compare);
@@ -104,7 +104,7 @@ static void test_latency_just_under_a_half_period_is_not_a_missed_compare(void)
 {
     pulse_generator_t pg;
     init_instance(&pg);
-    pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000);
+    pulse_generator_start_continuous(&pg, 1000);
 
     /* The counter reaches one tick short of the compare just written: that
        match still fires, so nothing has to be rescheduled. */
@@ -122,7 +122,7 @@ static void test_latency_of_exactly_a_half_period_is_a_missed_compare(void)
 {
     pulse_generator_t pg;
     init_instance(&pg);
-    pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000);
+    pulse_generator_start_continuous(&pg, 1000);
 
     /* The counter has exactly reached the compare just written, so that match
        would not fire until the counter wrapped all the way around. */
@@ -142,7 +142,7 @@ static void test_the_edge_after_a_missed_compare_is_measured_from_the_new_one(vo
 {
     pulse_generator_t pg;
     init_instance(&pg);
-    pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000);
+    pulse_generator_start_continuous(&pg, 1000);
 
     hw.isr_latency_ticks = 1000;
     mock_hw_fire_and_notify(&pg, &hw);
@@ -162,7 +162,7 @@ static void test_a_missed_compare_still_counts_its_edge(void)
 {
     pulse_generator_t pg;
     init_instance(&pg);
-    pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000);
+    pulse_generator_start_continuous(&pg, 1000);
     hw.isr_latency_ticks = 1000;
 
     mock_hw_fire_and_notify(&pg, &hw);
@@ -177,7 +177,7 @@ static void test_a_failed_compare_write_is_propagated_and_the_movement_survives(
 {
     pulse_generator_t pg;
     init_instance(&pg);
-    pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000);
+    pulse_generator_start_continuous(&pg, 1000);
     hw.set_compare_result = PULSE_GENERATOR_ERROR;
 
     pulse_generator_status_t status = mock_hw_fire_and_notify(&pg, &hw);
@@ -201,7 +201,7 @@ static void test_a_counter_range_that_is_not_a_power_of_two_is_rejected(void)
     init_instance(&pg);
 
     pulse_generator_status_t status =
-        pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000);
+        pulse_generator_start_continuous(&pg, 1000);
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, status);
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_IDLE, pulse_generator_get_state(&pg));
@@ -215,7 +215,7 @@ static void test_a_zero_counter_range_is_rejected(void)
     init_instance(&pg);
 
     pulse_generator_status_t status =
-        pulse_generator_start_continuous(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1000);
+        pulse_generator_start_continuous(&pg, 1000);
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, status);
     TEST_ASSERT_FALSE(hw.channel_running);
@@ -232,7 +232,7 @@ static void test_a_fixed_count_movement_completes_across_the_counter_wrap(void)
     hw.counter = 200;
     init_instance(&pg);
 
-    pulse_generator_start_fixed_count(&pg, PULSE_GENERATOR_BACKEND_TIMER, 1, 1);
+    pulse_generator_start_fixed_count(&pg, 1, 1);
     TEST_ASSERT_EQUAL_UINT32(250, hw.first_compare);
 
     mock_hw_fire_and_notify(&pg, &hw);
