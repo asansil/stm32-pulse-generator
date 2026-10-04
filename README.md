@@ -19,7 +19,7 @@ fully testable on a host machine without hardware.
   real hardware. Within each example, `Core/` is STM32CubeMX-owned
   (regenerated from the `.ioc`, hand edits only inside `USER CODE`
   blocks) and `App/` holds the hand-written integration code (e.g. the
-  real `pulse_generator_platform_t`), organized in cohesive subfolders.
+  real `pulse_generator_ops_t`), organized in cohesive subfolders.
 - `docs/` — reference material (frequency/resolution spreadsheet).
 
 ## Building and running the tests (host)

@@ -1,9 +1,5 @@
 #include "pulse_generator_platform.h"
 
-#include "main.h"
-
-extern TIM_HandleTypeDef htim4;
-
 #define IS_APB1_TIMER(inst) ((inst) == TIM2 || (inst) == TIM3 || (inst) == TIM4 || (inst) == TIM5 || \
                               (inst) == TIM6 || (inst) == TIM7 || (inst) == TIM12 || \
                               (inst) == TIM13 || (inst) == TIM14)
@@ -11,71 +7,11 @@ extern TIM_HandleTypeDef htim4;
 #define IS_APB2_TIMER(inst) ((inst) == TIM1 || (inst) == TIM8 || (inst) == TIM9 || \
                               (inst) == TIM10 || (inst) == TIM11)
 
-/* Free-running counter: ARR is kept at the counter's full-width maximum
-   and every compare match is scheduled relative to the previous one, so
-   all compare arithmetic wraps modulo 2^16 or 2^32 depending on the
-   timer. Masking with counter_max() gives that wrap for either width. */
-static uint32_t counter_max(const TIM_HandleTypeDef *htim)
+/* Counting frequency of the timer, i.e. the bus clock after the APB timer
+   multiplier and the prescaler. Returns 0 for a timer instance this helper
+   does not know, which stm32f4_pg_hw_init() turns into a failed bind. */
+static uint32_t resolve_tick_hz(const TIM_HandleTypeDef *htim)
 {
-    return IS_TIM_32B_COUNTER_INSTANCE(htim->Instance) ? 0xFFFFFFFFU : 0xFFFFU;
-}
-
-static pulse_generator_status_t stm32f4_timer_start(void *ctx, uint32_t half_period_ticks)
-{
-    TIM_HandleTypeDef *htim = (TIM_HandleTypeDef *)ctx;
-    uint32_t max = counter_max(htim);
-
-    /* The modular compare arithmetic below requires the counter to run
-       over its full range, whatever Counter Period was configured. */
-    __HAL_TIM_SET_AUTORELOAD(htim, max);
-
-    /* Force OC1REF low before (re)enabling the output: a stop() in the
-       middle of a pulse leaves it high, which would make the pin jump high
-       as soon as the channel is enabled and invert every edge the library
-       counts afterwards. */
-    MODIFY_REG(htim->Instance->CCMR1, TIM_CCMR1_OC1M, TIM_OCMODE_FORCED_INACTIVE);
-    MODIFY_REG(htim->Instance->CCMR1, TIM_CCMR1_OC1M, TIM_OCMODE_TOGGLE);
-
-    __HAL_TIM_SET_COMPARE(htim, TIM_CHANNEL_1, (__HAL_TIM_GET_COUNTER(htim) + half_period_ticks) & max);
-
-    /* Drop any compare flag left over from a previous movement, so enabling
-       the interrupt does not report a toggle that never happened. */
-    __HAL_TIM_CLEAR_FLAG(htim, TIM_FLAG_CC1);
-
-    return (HAL_TIM_OC_Start_IT(htim, TIM_CHANNEL_1) == HAL_OK) ? PULSE_GENERATOR_OK : PULSE_GENERATOR_ERROR;
-}
-
-static pulse_generator_status_t stm32f4_timer_stop(void *ctx)
-{
-    TIM_HandleTypeDef *htim = (TIM_HandleTypeDef *)ctx;
-    return (HAL_TIM_OC_Stop_IT(htim, TIM_CHANNEL_1) == HAL_OK) ? PULSE_GENERATOR_OK : PULSE_GENERATOR_ERROR;
-}
-
-static pulse_generator_status_t stm32f4_advance_compare(void *ctx, uint32_t half_period_ticks)
-{
-    TIM_HandleTypeDef *htim = (TIM_HandleTypeDef *)ctx;
-    uint32_t max = counter_max(htim);
-
-    uint32_t previous = __HAL_TIM_GET_COMPARE(htim, TIM_CHANNEL_1);
-    __HAL_TIM_SET_COMPARE(htim, TIM_CHANNEL_1, (previous + half_period_ticks) & max);
-
-    /* Ticks elapsed since the match being serviced, modulo the counter
-       width. If a whole half period has already gone by, the counter is at
-       or past the new compare value and the match would not fire until the
-       counter wraps: reschedule from now instead, losing phase but not a
-       full wrap. */
-    uint32_t elapsed = (__HAL_TIM_GET_COUNTER(htim) - previous) & max;
-    if (elapsed >= half_period_ticks) {
-        __HAL_TIM_SET_COMPARE(htim, TIM_CHANNEL_1, (__HAL_TIM_GET_COUNTER(htim) + half_period_ticks) & max);
-        return PULSE_GENERATOR_ERROR_MISSED_COMPARE;
-    }
-
-    return PULSE_GENERATOR_OK;
-}
-
-static uint32_t stm32f4_get_timer_main_clk(void *ctx)
-{
-    TIM_HandleTypeDef *htim = (TIM_HandleTypeDef *)ctx;
     uint32_t tim_clk;
     uint32_t pclk;
 
@@ -86,57 +22,146 @@ static uint32_t stm32f4_get_timer_main_clk(void *ctx)
         pclk = HAL_RCC_GetPCLK2Freq();
         tim_clk = ((RCC->CFGR & RCC_CFGR_PPRE2) == RCC_HCLK_DIV1) ? pclk : pclk * 2U;
     } else {
-        /* Unrecognized timer instance: corrupt ctx, or a timer this
-           helper doesn't know about. Report 0 Hz — an obviously broken
-           tick rate that makes the library reject every frequency as out
-           of range — instead of silently misreporting it as a
-           plausible-looking APB2 clock. */
         return 0;
     }
 
     return tim_clk / (htim->Init.Prescaler + 1U);
 }
 
-static uint32_t stm32f4_get_max_ticks(void *ctx)
+pulse_generator_status_t stm32f4_pg_hw_init(stm32f4_pg_hw_t *hw,
+                                            TIM_HandleTypeDef *htim,
+                                            uint32_t channel)
 {
-    return counter_max((const TIM_HandleTypeDef *)ctx);
+    if (hw == NULL || htim == NULL || htim->Instance == NULL) {
+        return PULSE_GENERATOR_ERROR_INVALID_PARAM;
+    }
+
+    TIM_TypeDef *tim = htim->Instance;
+
+    volatile uint32_t *ccr;
+    volatile uint32_t *ccmr;
+    uint32_t ocm_mask;
+    uint32_t ocm_shift;
+    uint32_t cc_flag;
+
+    /* The TIM_OCMODE_* constants are expressed in OC1M's position, so the
+       channels living in the upper half of a CCMR register need them shifted
+       by 8. CCMR1 holds channels 1-2, CCMR2 holds 3-4. */
+    switch (channel) {
+        case TIM_CHANNEL_1:
+            ccr = &tim->CCR1; ccmr = &tim->CCMR1;
+            ocm_mask = TIM_CCMR1_OC1M; ocm_shift = 0U; cc_flag = TIM_FLAG_CC1;
+            break;
+        case TIM_CHANNEL_2:
+            ccr = &tim->CCR2; ccmr = &tim->CCMR1;
+            ocm_mask = TIM_CCMR1_OC2M; ocm_shift = 8U; cc_flag = TIM_FLAG_CC2;
+            break;
+        case TIM_CHANNEL_3:
+            ccr = &tim->CCR3; ccmr = &tim->CCMR2;
+            ocm_mask = TIM_CCMR2_OC3M; ocm_shift = 0U; cc_flag = TIM_FLAG_CC3;
+            break;
+        case TIM_CHANNEL_4:
+            ccr = &tim->CCR4; ccmr = &tim->CCMR2;
+            ocm_mask = TIM_CCMR2_OC4M; ocm_shift = 8U; cc_flag = TIM_FLAG_CC4;
+            break;
+        default:
+            return PULSE_GENERATOR_ERROR_INVALID_PARAM;
+    }
+
+    if (!IS_TIM_CCX_INSTANCE(tim, channel)) {
+        return PULSE_GENERATOR_ERROR_INVALID_PARAM;
+    }
+
+    uint32_t tick_hz = resolve_tick_hz(htim);
+    if (tick_hz == 0) {
+        return PULSE_GENERATOR_ERROR_INVALID_PARAM;
+    }
+
+    hw->htim = htim;
+    hw->channel = channel;
+    hw->ccr = ccr;
+    hw->ccmr = ccmr;
+    hw->ocm_mask = ocm_mask;
+    hw->ocm_shift = ocm_shift;
+    hw->cc_flag = cc_flag;
+    hw->counter_max = IS_TIM_32B_COUNTER_INSTANCE(tim) ? 0xFFFFFFFFU : 0xFFFFU;
+    hw->tick_hz = tick_hz;
+
+    return PULSE_GENERATOR_OK;
 }
 
-static pulse_generator_status_t stm32f4_dma_start_stub(void *ctx, const uint32_t *buffer, size_t len)
+static pulse_generator_status_t stm32f4_channel_start(void *hw_ptr, uint32_t first_compare)
 {
-    (void)ctx;
-    (void)buffer;
-    (void)len;
-    return PULSE_GENERATOR_ERROR;
+    stm32f4_pg_hw_t *hw = (stm32f4_pg_hw_t *)hw_ptr;
+
+    /* The library schedules every match relative to the previous one and
+       wraps the arithmetic at counter_max, which requires the counter to run
+       over its full range whatever Counter Period was configured. */
+    __HAL_TIM_SET_AUTORELOAD(hw->htim, hw->counter_max);
+
+    /* Force OCxREF low before (re)enabling the output: a stop() in the
+       middle of a pulse leaves it high, which would make the pin jump high
+       as soon as the channel is enabled and invert every edge the library
+       counts afterwards. */
+    MODIFY_REG(*hw->ccmr, hw->ocm_mask, TIM_OCMODE_FORCED_INACTIVE << hw->ocm_shift);
+    MODIFY_REG(*hw->ccmr, hw->ocm_mask, TIM_OCMODE_TOGGLE << hw->ocm_shift);
+
+    /* As late as possible: the library measured first_compare from the
+       counter just before calling, so everything done in between eats into
+       the first half period. */
+    *hw->ccr = first_compare;
+
+    /* Drop any compare flag left over from a previous movement, so enabling
+       the interrupt does not report a toggle that never happened. */
+    __HAL_TIM_CLEAR_FLAG(hw->htim, hw->cc_flag);
+
+    return (HAL_TIM_OC_Start_IT(hw->htim, hw->channel) == HAL_OK) ? PULSE_GENERATOR_OK
+                                                                  : PULSE_GENERATOR_ERROR;
 }
 
-static pulse_generator_status_t stm32f4_dma_stop_stub(void *ctx)
+static pulse_generator_status_t stm32f4_channel_stop(void *hw_ptr)
 {
-    (void)ctx;
-    return PULSE_GENERATOR_ERROR;
+    stm32f4_pg_hw_t *hw = (stm32f4_pg_hw_t *)hw_ptr;
+
+    /* Leaves the counter running if other channels of the same timer are
+       still active, which is what HAL_TIM_OC_Stop_IT already does. */
+    return (HAL_TIM_OC_Stop_IT(hw->htim, hw->channel) == HAL_OK) ? PULSE_GENERATOR_OK
+                                                                 : PULSE_GENERATOR_ERROR;
 }
 
-static pulse_generator_status_t stm32f4_gpio_set_stub(void *ctx)
+static pulse_generator_status_t stm32f4_set_compare(void *hw_ptr, uint32_t compare)
 {
-    (void)ctx;
-    return PULSE_GENERATOR_ERROR;
+    stm32f4_pg_hw_t *hw = (stm32f4_pg_hw_t *)hw_ptr;
+
+    *hw->ccr = compare;
+
+    return PULSE_GENERATOR_OK;
 }
 
-static pulse_generator_status_t stm32f4_gpio_clear_stub(void *ctx)
+static uint32_t stm32f4_get_counter(void *hw_ptr)
 {
-    (void)ctx;
-    return PULSE_GENERATOR_ERROR;
+    stm32f4_pg_hw_t *hw = (stm32f4_pg_hw_t *)hw_ptr;
+
+    return __HAL_TIM_GET_COUNTER(hw->htim);
 }
 
-const pulse_generator_platform_t g_stm32f4_platform = {
-    .timer_start         = stm32f4_timer_start,
-    .timer_stop          = stm32f4_timer_stop,
-    .advance_compare     = stm32f4_advance_compare,
-    .dma_start           = stm32f4_dma_start_stub,
-    .dma_stop            = stm32f4_dma_stop_stub,
-    .gpio_set            = stm32f4_gpio_set_stub,
-    .gpio_clear          = stm32f4_gpio_clear_stub,
-    .get_timer_main_clk  = stm32f4_get_timer_main_clk,
-    .get_max_ticks       = stm32f4_get_max_ticks,
-    .ctx                 = &htim4,
+static uint32_t stm32f4_get_tick_hz(void *hw_ptr)
+{
+    return ((const stm32f4_pg_hw_t *)hw_ptr)->tick_hz;
+}
+
+static uint32_t stm32f4_get_counter_max(void *hw_ptr)
+{
+    return ((const stm32f4_pg_hw_t *)hw_ptr)->counter_max;
+}
+
+const pulse_generator_ops_t g_stm32f4_pg_ops = {
+    .channel_start   = stm32f4_channel_start,
+    .channel_stop    = stm32f4_channel_stop,
+    .set_compare     = stm32f4_set_compare,
+    .get_counter     = stm32f4_get_counter,
+    .get_tick_hz     = stm32f4_get_tick_hz,
+    .get_counter_max = stm32f4_get_counter_max,
+    /* dma_* and gpio_* stay NULL: this example drives the timer backend
+       only, and the library reports NOT_SUPPORTED for the rest. */
 };

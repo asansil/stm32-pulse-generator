@@ -13,7 +13,7 @@ so its level depends entirely on what holds the line:
 - **During reset and early boot** (until `MX_TIM4_Init()` runs) the pin is a
   floating input. On this example that window lasts hundreds of
   milliseconds. **Only an external pull-down covers it.**
-- **Between movements** (channel disabled after `timer_stop`) the pin is in
+- **Between movements** (channel disabled after `channel_stop`) the pin is in
   alternate-function mode with its output buffer off. **The internal
   pull-down covers it**, and so does an external one.
 
@@ -55,7 +55,7 @@ driven low:
 
 Moving the probe to channel D1 removed the problem.
 
-The fault mixed with the real behaviour of the pin. While the timer drove PD12, D0 reproduced the signal correctly. Whenever PD12 was not driven (before the burst, and right after `timer_stop()` disabled the channel), D0 reported high. That is what made the burst look inverted.
+The fault mixed with the real behaviour of the pin. While the timer drove PD12, D0 reproduced the signal correctly. Whenever PD12 was not driven (before the burst, and right after `channel_stop()` disabled the channel), D0 reported high. That is what made the burst look inverted.
 
 The LED was a useful cross-check. LD4 stayed off at idle, which is impossible if PD12 were really at 3.3 V: the LED would draw about 2 mA through 510 Ω.
 
@@ -85,8 +85,8 @@ With an external 10 kΩ resistor from PD12 to GND:
 | Reset, `HAL_Init()`, `SystemClock_Config()` | Input (reset state) | None | 0 | Nothing: floating |
 | `MX_GPIO_Init()` … `MX_USB_HOST_Init()` | Input (reset state) | None | 0 | Nothing: floating |
 | `MX_TIM4_Init()` → `HAL_TIM_MspPostInit()` | Alternate function (AF2) | Pull-down | 0 | Pull-down only (~40 kΩ) |
-| `timer_start()` → burst | Alternate function | Pull-down | 1 | TIM4 push-pull output |
-| `timer_stop()` → idle | Alternate function | Pull-down | 0 | Pull-down only |
+| `channel_start()` → burst | Alternate function | Pull-down | 1 | TIM4 push-pull output |
+| `channel_stop()` → idle | Alternate function | Pull-down | 0 | Pull-down only |
 
 ## Why the pin floats
 
@@ -135,7 +135,7 @@ The capture in observation 2 reads as follows:
 2. **Rising edge.** Flashing reset the MCU. PD12 went back to its reset state (a floating input) and drifted high.
 3. **Long high.** The boot sequence above was still running.
 4. **Back to low.** `HAL_TIM_MspPostInit()` enabled the pull-down. This is invisible at this zoom level.
-5. **Burst.** About 500 µs later, `timer_start()` enabled the channel and the first toggle produced the first rising edge.
+5. **Burst.** About 500 µs later, `channel_start()` enabled the channel and the first toggle produced the first rising edge.
 
 With the external 10 kΩ resistor, the line is held low from power-up, independently of what the firmware is doing. Steps 2 and 3 no longer happen.
 
