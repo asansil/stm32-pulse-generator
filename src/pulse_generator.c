@@ -1,15 +1,35 @@
 #include "pulse_generator.h"
 
+/* Checked once in init(), so the rest of the library can call these without
+   guarding every use. The optional hooks are not here: a NULL one means the
+   platform does not support the operation needing it. */
+static bool has_mandatory_hooks(const pulse_generator_ops_t *ops)
+{
+    return ops->channel_start != NULL &&
+           ops->channel_stop != NULL &&
+           ops->set_compare != NULL &&
+           ops->get_counter != NULL &&
+           ops->get_tick_hz != NULL &&
+           ops->get_counter_max != NULL;
+}
+
 pulse_generator_status_t pulse_generator_init(
     pulse_generator_t *pg,
-    const pulse_generator_platform_t *platform)
+    const pulse_generator_config_t *config)
 {
-    if (pg == NULL || platform == NULL) {
+    if (pg == NULL || config == NULL || config->ops == NULL) {
+        return PULSE_GENERATOR_ERROR_INVALID_PARAM;
+    }
+
+    if (!has_mandatory_hooks(config->ops)) {
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
     *pg = (pulse_generator_t){0};
-    pg->platform = platform;
+    pg->ops      = config->ops;
+    pg->hw       = config->hw;
+    pg->on_event = config->on_event;
+    pg->user_ctx = config->user_ctx;
 
     return PULSE_GENERATOR_OK;
 }
@@ -29,27 +49,12 @@ uint32_t pulse_generator_get_pulse_count(const pulse_generator_t *pg)
         return 0;
     }
 
-    return pg->toggle_count / 2;
+    return pg->edge_count / 2;
 }
 
 bool pulse_generator_is_busy(const pulse_generator_t *pg)
 {
     return pulse_generator_get_state(pg) == PULSE_GENERATOR_STATE_RUNNING;
-}
-
-pulse_generator_status_t pulse_generator_set_complete_callback(
-    pulse_generator_t *pg,
-    pulse_generator_complete_cb_t callback,
-    void *user_ctx)
-{
-    if (pg == NULL) {
-        return PULSE_GENERATOR_ERROR_INVALID_PARAM;
-    }
-
-    pg->complete_cb = callback;
-    pg->complete_cb_user_ctx = user_ctx;
-
-    return PULSE_GENERATOR_OK;
 }
 
 void pulse_generator_reset_pulse_count(pulse_generator_t *pg)
@@ -58,7 +63,20 @@ void pulse_generator_reset_pulse_count(pulse_generator_t *pg)
         return;
     }
 
-    pg->toggle_count = 0;
+    pg->edge_count = 0;
+}
+
+/* Reads the callback into locals before invoking it: the instance is already
+   in its post-event state, and this way a callback that reconfigures the
+   instance cannot pull the fields out from under this call. */
+static void emit_event(pulse_generator_t *pg, pulse_generator_event_t event)
+{
+    pulse_generator_event_cb_t callback = pg->on_event;
+    void *user_ctx = pg->user_ctx;
+
+    if (callback != NULL) {
+        callback(pg, event, user_ctx);
+    }
 }
 
 pulse_generator_status_t pulse_generator_stop(pulse_generator_t *pg)
@@ -71,9 +89,9 @@ pulse_generator_status_t pulse_generator_stop(pulse_generator_t *pg)
         return PULSE_GENERATOR_OK;
     }
 
-    pulse_generator_status_t status = pg->platform->timer_stop(pg->platform->ctx);
+    pulse_generator_status_t status = pg->ops->channel_stop(pg->hw);
     pg->state = PULSE_GENERATOR_STATE_IDLE;
-    pg->toggle_count = 0;
+    pg->edge_count = 0;
 
     return status;
 }
@@ -90,9 +108,8 @@ static pulse_generator_status_t frequency_to_half_period_ticks(
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
-    uint32_t timer_main_clk = pg->platform->get_timer_main_clk(pg->platform->ctx);
-    uint32_t ticks = (timer_main_clk / 2) / frequency_hz;
-    if (ticks == 0 || ticks > pg->platform->get_max_ticks(pg->platform->ctx)) {
+    uint32_t ticks = (pg->tick_hz / 2) / frequency_hz;
+    if (ticks == 0 || ticks > pg->counter_max) {
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
@@ -100,27 +117,99 @@ static pulse_generator_status_t frequency_to_half_period_ticks(
     return PULSE_GENERATOR_OK;
 }
 
-static pulse_generator_status_t start_timer_movement(
-    pulse_generator_t *pg,
-    pulse_generator_mode_t mode,
-    uint32_t frequency_hz)
+/* Snapshots the platform properties that must not change while a movement
+   runs, so that neither the compare ISR nor set_frequency() needs a hook
+   call to read them back. */
+static pulse_generator_status_t capture_timing(pulse_generator_t *pg)
 {
-    uint32_t half_period_ticks;
-    pulse_generator_status_t status = frequency_to_half_period_ticks(pg, frequency_hz, &half_period_ticks);
+    uint32_t counter_max = pg->ops->get_counter_max(pg->hw);
+
+    /* Every compare value is masked with counter_max, which only wraps
+       correctly if the counter's range is a power of two. Checking it here
+       turns a platform reporting, say, a clamped maximum into a start that
+       fails loudly instead of an output that is silently wrong. */
+    if (counter_max == 0 || (counter_max & (counter_max + 1u)) != 0) {
+        return PULSE_GENERATOR_ERROR_INVALID_PARAM;
+    }
+
+    pg->counter_max = counter_max;
+    pg->tick_hz = pg->ops->get_tick_hz(pg->hw);
+
+    return PULSE_GENERATOR_OK;
+}
+
+/* Schedules the toggle after the match being serviced, half a period after
+   that match rather than after "now", so interrupt latency does not
+   accumulate as drift. */
+static pulse_generator_status_t schedule_next_compare(pulse_generator_t *pg)
+{
+    const uint32_t mask = pg->counter_max;
+    const uint32_t half_period_ticks = pg->half_period_ticks;
+    const uint32_t previous = pg->last_compare;
+
+    uint32_t next = (previous + half_period_ticks) & mask;
+    pulse_generator_status_t status = pg->ops->set_compare(pg->hw, next);
+
+    /* Tracked even when the write failed, so the reference stays the value
+       the library asked for rather than a stale one. */
+    pg->last_compare = next;
     if (status != PULSE_GENERATOR_OK) {
         return status;
     }
 
+    /* Ticks elapsed since the match being serviced, modulo the counter's
+       width. Read once into a local: a second read would see a later counter
+       and could disagree with this comparison. If a whole half period has
+       already gone by, the counter is at or past `next` and that match would
+       not fire until the counter wraps all the way around, so reschedule
+       from now instead, losing phase but not a full wrap. */
+    const uint32_t counter = pg->ops->get_counter(pg->hw);
+    if (((counter - previous) & mask) >= half_period_ticks) {
+        next = (counter + half_period_ticks) & mask;
+        status = pg->ops->set_compare(pg->hw, next);
+        pg->last_compare = next;
+
+        return (status == PULSE_GENERATOR_OK) ? PULSE_GENERATOR_ERROR_MISSED_COMPARE : status;
+    }
+
+    return PULSE_GENERATOR_OK;
+}
+
+static pulse_generator_status_t start_timer_movement(
+    pulse_generator_t *pg,
+    pulse_generator_mode_t mode,
+    uint32_t frequency_hz,
+    uint32_t target_edge_count)
+{
+    pulse_generator_status_t status = capture_timing(pg);
+    if (status != PULSE_GENERATOR_OK) {
+        return status;
+    }
+
+    uint32_t half_period_ticks;
+    status = frequency_to_half_period_ticks(pg, frequency_hz, &half_period_ticks);
+    if (status != PULSE_GENERATOR_OK) {
+        return status;
+    }
+
+    /* The channel is stopped, so the counter is either frozen or running for
+       some other channel of the same timer. Reading it here and leaving
+       channel_start() to write the compare register as late as it can keeps
+       the first half period from being eaten by the arming itself. */
+    uint32_t first_compare = (pg->ops->get_counter(pg->hw) + half_period_ticks) & pg->counter_max;
+
     /* Publish the movement before arming the hardware: with a short half
        period the first compare-match interrupt can fire before
-       timer_start() returns, and notify_compare_match() must already see
+       channel_start() returns, and notify_compare_match() must already see
        the instance as RUNNING to schedule the next toggle. */
     pg->mode = mode;
     pg->half_period_ticks = half_period_ticks;
-    pg->toggle_count = 0;
+    pg->edge_count = 0;
+    pg->target_edge_count = target_edge_count;
+    pg->last_compare = first_compare;
     pg->state = PULSE_GENERATOR_STATE_RUNNING;
 
-    status = pg->platform->timer_start(pg->platform->ctx, half_period_ticks);
+    status = pg->ops->channel_start(pg->hw, first_compare);
     if (status != PULSE_GENERATOR_OK) {
         pg->state = PULSE_GENERATOR_STATE_IDLE;
     }
@@ -130,7 +219,6 @@ static pulse_generator_status_t start_timer_movement(
 
 pulse_generator_status_t pulse_generator_start_fixed_count(
     pulse_generator_t *pg,
-    pulse_generator_backend_t backend,
     uint32_t frequency_hz,
     uint32_t pulse_count)
 {
@@ -142,22 +230,18 @@ pulse_generator_status_t pulse_generator_start_fixed_count(
         return PULSE_GENERATOR_ERROR_INVALID_STATE;
     }
 
-    if (backend == PULSE_GENERATOR_BACKEND_BITBANG) {
+    /* Each pulse is two compare matches, so the edge target would overflow
+       past half the range. */
+    if (pulse_count == 0 || pulse_count > UINT32_MAX / 2u) {
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
-    if (pulse_count == 0) {
-        return PULSE_GENERATOR_ERROR_INVALID_PARAM;
-    }
-
-    pg->target_pulse_count = pulse_count;
-
-    return start_timer_movement(pg, PULSE_GENERATOR_MODE_FIXED_COUNT_TIMER, frequency_hz);
+    return start_timer_movement(pg, PULSE_GENERATOR_MODE_FIXED_COUNT,
+                                frequency_hz, pulse_count * 2u);
 }
 
 pulse_generator_status_t pulse_generator_start_continuous(
     pulse_generator_t *pg,
-    pulse_generator_backend_t backend,
     uint32_t frequency_hz)
 {
     if (pg == NULL) {
@@ -168,11 +252,24 @@ pulse_generator_status_t pulse_generator_start_continuous(
         return PULSE_GENERATOR_ERROR_INVALID_STATE;
     }
 
-    if (backend == PULSE_GENERATOR_BACKEND_BITBANG) {
+    /* No edge target: runs until stop(). */
+    return start_timer_movement(pg, PULSE_GENERATOR_MODE_CONTINUOUS, frequency_hz, 0);
+}
+
+pulse_generator_status_t pulse_generator_start_profile(
+    pulse_generator_t *pg,
+    const uint32_t *intervals,
+    size_t len)
+{
+    (void)intervals;
+    (void)len;
+
+    if (pg == NULL) {
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
-    return start_timer_movement(pg, PULSE_GENERATOR_MODE_CONTINUOUS_TIMER, frequency_hz);
+    /* A placeholder the scheduled mode (M8) replaces rather than fills in. */
+    return PULSE_GENERATOR_ERROR_NOT_SUPPORTED;
 }
 
 pulse_generator_status_t pulse_generator_set_frequency(pulse_generator_t *pg, uint32_t frequency_hz)
@@ -181,7 +278,7 @@ pulse_generator_status_t pulse_generator_set_frequency(pulse_generator_t *pg, ui
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
-    if (pg->state != PULSE_GENERATOR_STATE_RUNNING || pg->mode != PULSE_GENERATOR_MODE_CONTINUOUS_TIMER) {
+    if (pg->state != PULSE_GENERATOR_STATE_RUNNING || pg->mode != PULSE_GENERATOR_MODE_CONTINUOUS) {
         return PULSE_GENERATOR_ERROR_INVALID_STATE;
     }
 
@@ -196,18 +293,6 @@ pulse_generator_status_t pulse_generator_set_frequency(pulse_generator_t *pg, ui
     return PULSE_GENERATOR_OK;
 }
 
-pulse_generator_status_t pulse_generator_tick(pulse_generator_t *pg, uint32_t elapsed_us)
-{
-    (void)elapsed_us;
-
-    if (pg == NULL) {
-        return PULSE_GENERATOR_ERROR_INVALID_PARAM;
-    }
-
-    /* No-op until bit-bang backends exist (M8). */
-    return PULSE_GENERATOR_OK;
-}
-
 pulse_generator_status_t pulse_generator_notify_compare_match(pulse_generator_t *pg)
 {
     if (pg == NULL) {
@@ -215,27 +300,37 @@ pulse_generator_status_t pulse_generator_notify_compare_match(pulse_generator_t 
     }
 
     if (pg->state != PULSE_GENERATOR_STATE_RUNNING ||
-        (pg->mode != PULSE_GENERATOR_MODE_FIXED_COUNT_TIMER &&
-         pg->mode != PULSE_GENERATOR_MODE_CONTINUOUS_TIMER)) {
+        (pg->mode != PULSE_GENERATOR_MODE_FIXED_COUNT &&
+         pg->mode != PULSE_GENERATOR_MODE_CONTINUOUS)) {
         return PULSE_GENERATOR_OK;
     }
 
-    pg->toggle_count++;
+    pg->edge_count++;
 
-    if (pg->mode == PULSE_GENERATOR_MODE_CONTINUOUS_TIMER ||
-        pg->toggle_count < pg->target_pulse_count * 2) {
-        return pg->platform->advance_compare(pg->platform->ctx, pg->half_period_ticks);
+    if (pg->target_edge_count == 0 || pg->edge_count < pg->target_edge_count) {
+        pulse_generator_status_t status = schedule_next_compare(pg);
+        if (status == PULSE_GENERATOR_ERROR_MISSED_COMPARE) {
+            emit_event(pg, PULSE_GENERATOR_EVENT_MISSED_COMPARE);
+        }
+
+        return status;
     }
 
-    pulse_generator_status_t status = pg->platform->timer_stop(pg->platform->ctx);
+    pulse_generator_status_t status = pg->ops->channel_stop(pg->hw);
     pg->state = PULSE_GENERATOR_STATE_IDLE;
-    pg->toggle_count = 0;
+    pg->edge_count = 0;
 
-    pulse_generator_complete_cb_t cb = pg->complete_cb;
-    void *user_ctx = pg->complete_cb_user_ctx;
-    if (cb != NULL) {
-        cb(user_ctx);
-    }
+    emit_event(pg, PULSE_GENERATOR_EVENT_COMPLETE);
 
     return status;
+}
+
+pulse_generator_status_t pulse_generator_notify_dma_complete(pulse_generator_t *pg)
+{
+    if (pg == NULL) {
+        return PULSE_GENERATOR_ERROR_INVALID_PARAM;
+    }
+
+    /* A placeholder the scheduled mode (M8) replaces rather than fills in. */
+    return PULSE_GENERATOR_ERROR_NOT_SUPPORTED;
 }

@@ -33,3 +33,30 @@ add_executable(test_continuous
 target_link_libraries(test_continuous PRIVATE pulse_generator unity)
 
 add_test(NAME continuous COMMAND test_continuous)
+
+add_executable(test_compare_scheduling
+    test_compare_scheduling.c
+    mock_platform.c
+)
+
+target_link_libraries(test_compare_scheduling PRIVATE pulse_generator unity)
+
+add_test(NAME compare_scheduling COMMAND test_compare_scheduling)
+
+add_executable(test_multi_instance
+    test_multi_instance.c
+    mock_platform.c
+)
+
+target_link_libraries(test_multi_instance PRIVATE pulse_generator unity)
+
+add_test(NAME multi_instance COMMAND test_multi_instance)
+
+add_executable(test_not_supported
+    test_not_supported.c
+    mock_platform.c
+)
+
+target_link_libraries(test_not_supported PRIVATE pulse_generator unity)
+
+add_test(NAME not_supported COMMAND test_not_supported)
