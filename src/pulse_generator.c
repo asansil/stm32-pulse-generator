@@ -25,11 +25,12 @@ pulse_generator_status_t pulse_generator_init(
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
-    *pg = (pulse_generator_t){0};
-    pg->ops      = config->ops;
-    pg->hw       = config->hw;
-    pg->on_event = config->on_event;
-    pg->user_ctx = config->user_ctx;
+    *pg = (pulse_generator_t){
+        .ops      = config->ops,
+        .hw       = config->hw,
+        .on_event = config->on_event,
+        .user_ctx = config->user_ctx,
+    };
 
     return PULSE_GENERATOR_OK;
 }
