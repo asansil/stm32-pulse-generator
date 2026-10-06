@@ -19,7 +19,8 @@ instants of the pin toggles are decided:
   until explicitly stopped.
 - **Scheduled** — an arbitrary sequence of pulses at caller-specified
   instants, streamed through a queue so the sequence need never be held in
-  memory in full. *(In design; see the roadmap.)*
+  memory in full. Executed by the compare interrupt, one edge at a time; a
+  DMA engine for higher rates is planned.
 
 ## Repository layout
 

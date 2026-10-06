@@ -70,38 +70,7 @@ static uint32_t mock_get_counter_max(void *hw_ptr)
     return hw->counter_max;
 }
 
-static pulse_generator_status_t mock_dma_start(void *hw_ptr, const uint32_t *buffer, size_t len)
-{
-    mock_hw_t *hw = (mock_hw_t *)hw_ptr;
-
-    hw->dma_running = true;
-    hw->dma_buffer = buffer;
-    hw->dma_len = len;
-
-    return PULSE_GENERATOR_OK;
-}
-
-static pulse_generator_status_t mock_dma_stop(void *hw_ptr)
-{
-    mock_hw_t *hw = (mock_hw_t *)hw_ptr;
-
-    hw->dma_running = false;
-
-    return PULSE_GENERATOR_OK;
-}
-
 const pulse_generator_ops_t g_mock_ops = {
-    .channel_start   = mock_channel_start,
-    .channel_stop    = mock_channel_stop,
-    .set_compare     = mock_set_compare,
-    .get_counter     = mock_get_counter,
-    .get_tick_hz     = mock_get_tick_hz,
-    .get_counter_max = mock_get_counter_max,
-    .dma_start       = mock_dma_start,
-    .dma_stop        = mock_dma_stop,
-};
-
-const pulse_generator_ops_t g_mock_ops_minimal = {
     .channel_start   = mock_channel_start,
     .channel_stop    = mock_channel_stop,
     .set_compare     = mock_set_compare,

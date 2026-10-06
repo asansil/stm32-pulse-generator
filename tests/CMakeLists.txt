@@ -52,11 +52,11 @@ target_link_libraries(test_multi_instance PRIVATE pulse_generator unity)
 
 add_test(NAME multi_instance COMMAND test_multi_instance)
 
-add_executable(test_not_supported
-    test_not_supported.c
+add_executable(test_scheduled
+    test_scheduled.c
     mock_platform.c
 )
 
-target_link_libraries(test_not_supported PRIVATE pulse_generator unity)
+target_link_libraries(test_scheduled PRIVATE pulse_generator unity)
 
-add_test(NAME not_supported COMMAND test_not_supported)
+add_test(NAME scheduled COMMAND test_scheduled)

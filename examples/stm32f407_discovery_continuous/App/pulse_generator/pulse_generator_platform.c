@@ -162,6 +162,4 @@ const pulse_generator_ops_t g_stm32f4_pg_ops = {
     .get_counter     = stm32f4_get_counter,
     .get_tick_hz     = stm32f4_get_tick_hz,
     .get_counter_max = stm32f4_get_counter_max,
-    /* dma_* stays NULL: this example needs no DMA, and the library reports
-       NOT_SUPPORTED for the operations that would. */
 };
