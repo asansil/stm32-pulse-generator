@@ -73,16 +73,6 @@ static void test_init_with_any_mandatory_hook_missing_is_rejected(void)
     }
 }
 
-static void test_init_accepts_ops_without_the_optional_hooks(void)
-{
-    pulse_generator_t pg;
-
-    pulse_generator_status_t status = pulse_generator_init(
-        &pg, &(pulse_generator_config_t){ .ops = &g_mock_ops_minimal, .hw = &hw });
-
-    TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, status);
-}
-
 static void test_init_accepts_a_platform_without_per_output_state(void)
 {
     pulse_generator_t pg;
@@ -132,7 +122,6 @@ int main(void)
     RUN_TEST(test_init_with_null_config_returns_invalid_param);
     RUN_TEST(test_init_with_null_ops_returns_invalid_param);
     RUN_TEST(test_init_with_any_mandatory_hook_missing_is_rejected);
-    RUN_TEST(test_init_accepts_ops_without_the_optional_hooks);
     RUN_TEST(test_init_accepts_a_platform_without_per_output_state);
     RUN_TEST(test_init_calls_no_hook);
     RUN_TEST(test_init_clears_state_left_by_a_previous_movement);

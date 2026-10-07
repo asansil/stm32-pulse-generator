@@ -40,18 +40,10 @@ typedef struct {
     int      get_counter_call_count;
     int      get_tick_hz_call_count;
     int      get_counter_max_call_count;
-
-    /* --- Optional hooks --- */
-    bool            dma_running;
-    const uint32_t *dma_buffer;
-    size_t          dma_len;
 } mock_hw_t;
 
-/** Every hook implemented. */
+/** The mock's operations table, shared by every simulated channel. */
 extern const pulse_generator_ops_t g_mock_ops;
-
-/** Only the mandatory hooks; every optional one is NULL. */
-extern const pulse_generator_ops_t g_mock_ops_minimal;
 
 /** Resets a simulated channel to a known state, with 16-bit counter and a
     2 MHz tick rate, chosen so that 1000 Hz maps to 1000 ticks and the
