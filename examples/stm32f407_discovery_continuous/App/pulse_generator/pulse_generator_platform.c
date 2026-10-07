@@ -123,8 +123,10 @@ static pulse_generator_status_t stm32f4_channel_stop(void *hw_ptr)
 {
     stm32f4_pg_hw_t *hw = (stm32f4_pg_hw_t *)hw_ptr;
 
-    /* Leaves the counter running if other channels of the same timer are
-       still active, which is what HAL_TIM_OC_Stop_IT already does. */
+    /* HAL_TIM_OC_Stop_IT leaves the counter running while other channels of
+       the same timer are active, as the contract requires, but clears CEN
+       along with the last one: with a single channel the counter stops at
+       the end of every movement, and channel_start() restarts it. */
     return (HAL_TIM_OC_Stop_IT(hw->htim, hw->channel) == HAL_OK) ? PULSE_GENERATOR_OK
                                                                  : PULSE_GENERATOR_ERROR;
 }
