@@ -60,3 +60,21 @@ add_executable(test_scheduled
 target_link_libraries(test_scheduled PRIVATE pulse_generator unity)
 
 add_test(NAME scheduled COMMAND test_scheduled)
+
+add_executable(test_dma_engine
+    test_dma_engine.c
+    mock_platform.c
+)
+
+target_link_libraries(test_dma_engine PRIVATE pulse_generator unity)
+
+add_test(NAME dma_engine COMMAND test_dma_engine)
+
+add_executable(test_dma_fixed_count
+    test_dma_fixed_count.c
+    mock_platform.c
+)
+
+target_link_libraries(test_dma_fixed_count PRIVATE pulse_generator unity)
+
+add_test(NAME dma_fixed_count COMMAND test_dma_fixed_count)
