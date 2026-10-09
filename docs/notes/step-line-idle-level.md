@@ -189,3 +189,27 @@ A channel that only fails when the input is weakly driven looks fine while the t
 - STM32F407xx datasheet: I/O static characteristics (weak pull-up/pull-down
   resistance).
 - UM1472, STM32F4DISCOVERY user manual: schematic for LD4 on PD12.
+
+## Update: the DMA engine drives the line low between movements
+
+Since the fixed-count example moved to the DMA engine (TIM4 CH1 in PWM
+mode, fed by DMA1 Stream 6), the pin state timeline above no longer holds
+for it after the first movement:
+
+| Phase | PD12 mode | Pull | TIM4 CC1E | Who sets the level |
+|---|---|---|---|---|
+| Reset → `MX_TIM4_Init()` | Input (reset state) | None | 0 | Nothing: floating |
+| `MX_TIM4_Init()` → first `stream_start()` | Alternate function (AF2) | Pull-down | 0 | Pull-down only |
+| `stream_start()` → movement | Alternate function | Pull-down | 1 | TIM4 push-pull output |
+| `stream_stop()` → idle | Alternate function | Pull-down | 1 | TIM4 output, OC1M forced inactive: driven low |
+
+`stream_start()` primes the timer with OC1M forced inactive before it sets
+CC1E, and `stream_stop()` forces OC1M inactive again instead of clearing
+CC1E. Once the first movement has started, the output stays enabled and
+drives the line low between movements, so the internal pull-down only
+matters until then.
+
+The floating window from reset to `MX_TIM4_Init()` is unchanged, and so is
+the conclusion: a STEP line still needs an external pull-down. The window
+is shorter on this example now, because the `.ioc` no longer starts the USB
+host stack and its 200 ms VBUS delay.
