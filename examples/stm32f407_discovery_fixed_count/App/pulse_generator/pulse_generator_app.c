@@ -16,9 +16,11 @@ extern TIM_HandleTypeDef htim4;
    the buffer fits whichever channel the board wiring picks. */
 #define PG_DMA_MAX_WORDS_PER_ENTRY 6U
 
-/* Shortest entry the DMA burst can keep up with, measured on the board.
-   0 leaves only the library's structural minimum of 2 ticks. */
-#define PG_MIN_ENTRY_NS 0U
+/* Shortest entry the DMA burst can keep up with. Measured on the board with
+   one entry per period: 333 ns (28 ticks) is the shortest that holds, at
+   250 ns entries start repeating. 500 ns keeps a 1.5x margin and caps the
+   frequency at 2 MHz. */
+#define PG_MIN_ENTRY_NS 500U
 
 /* Gap between movements, so each one stands apart on the analyzer. */
 #define PG_PAUSE_MS 500U
@@ -57,6 +59,7 @@ static volatile uint32_t completed_movement_count;
 static volatile uint32_t underrun_count;     /* should stay 0 */
 static volatile uint32_t notify_error_count; /* notify_dma_* returned an error; should stay 0 */
 static volatile uint32_t live_pulse_count;   /* refreshed on every pass of the main loop */
+static uint32_t          movement_pulse_count; /* highest count read during the movement */
 static uint32_t          last_movement_pulse_count;
 
 static void end_movement(void)
@@ -94,8 +97,9 @@ static void start_next_test_case(void)
 
     /* LD3 (PD13) is high from the start until the library reports the end,
        so the analyzer shows how long after the last pulse that happens
-       (up to one window). */
+       (the low half of the last period plus up to one window). */
     movement_ended = false;
+    movement_pulse_count = 0U;
     HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, GPIO_PIN_SET);
 
     last_start_status = pulse_generator_start_fixed_count(&pg, test_case->frequency_hz,
@@ -138,11 +142,21 @@ void pulse_generator_app_process(void)
 
     live_pulse_count = pulse_generator_get_pulse_count(&pg);
 
-    if (!movement_ended || (HAL_GetTick() - movement_ended_ms) < PG_PAUSE_MS) {
+    /* The count reads 0 as soon as the movement ends, so keep the highest
+       value seen while it runs. The end is reported up to one window after
+       the last period, which leaves this loop time to see the final count. */
+    if (!movement_ended) {
+        if (live_pulse_count > movement_pulse_count) {
+            movement_pulse_count = live_pulse_count;
+        }
         return;
     }
 
-    last_movement_pulse_count = live_pulse_count;
+    if ((HAL_GetTick() - movement_ended_ms) < PG_PAUSE_MS) {
+        return;
+    }
+
+    last_movement_pulse_count = movement_pulse_count;
     start_next_test_case();
 }
 

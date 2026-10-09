@@ -679,7 +679,8 @@ pulse_generator_status_t pulse_generator_init(
  * @note Returns as soon as the hardware is armed: the pulses are emitted in
  *       the background. Completion is reported as
  *       PULSE_GENERATOR_EVENT_COMPLETE; on the DMA engine, up to one window
- *       after the last pulse.
+ *       after the last period ends, i.e. after the low half that follows
+ *       the last pulse.
  */
 pulse_generator_status_t pulse_generator_start_fixed_count(
     pulse_generator_t *pg,
@@ -975,9 +976,9 @@ pulse_generator_status_t pulse_generator_notify_compare_match(pulse_generator_t 
  *         PULSE_GENERATOR_ERROR_INVALID_PARAM on a null instance;
  *         otherwise whatever the platform returned.
  * @note Refills the half just transferred with the next entries of the
- *       movement. A movement whose last pulse has finished stops here and
+ *       movement. A movement whose last period has finished stops here and
  *       reports PULSE_GENERATOR_EVENT_COMPLETE, up to one window after that
- *       pulse.
+ *       period.
  * @note A no-op when no DMA movement is in progress, so a late or spurious
  *       interrupt after a stop is harmless.
  */
