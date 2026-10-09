@@ -51,7 +51,7 @@ static void test_init_with_null_ops_returns_invalid_param(void)
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, status);
 }
 
-static void test_init_with_any_mandatory_hook_missing_is_rejected(void)
+static void test_init_with_any_compare_hook_missing_is_rejected(void)
 {
     for (int missing = 0; missing < 6; missing++) {
         pulse_generator_ops_t ops = g_mock_ops;
@@ -114,6 +114,82 @@ static void test_init_clears_state_left_by_a_previous_movement(void)
     TEST_ASSERT_EQUAL_UINT32(0, pulse_generator_get_pulse_count(&pg));
 }
 
+static uint32_t dma_buffer[4 * 3];
+
+static pulse_generator_dma_config_t valid_dma_config(void)
+{
+    return (pulse_generator_dma_config_t){
+        .buffer       = dma_buffer,
+        .buffer_words = 4 * 3,
+        .entries      = 4,
+        .window_us    = 1000,
+    };
+}
+
+static void test_init_with_any_dma_hook_missing_is_rejected(void)
+{
+    mock_dma_hw_t dma_hw;
+    mock_dma_hw_init(&dma_hw);
+
+    for (int missing = 0; missing < 6; missing++) {
+        pulse_generator_ops_t ops = g_mock_dma_ops;
+
+        switch (missing) {
+            case 0: ops.stream_start = NULL; break;
+            case 1: ops.stream_stop = NULL; break;
+            case 2: ops.get_stream_remaining = NULL; break;
+            case 3: ops.get_period_max = NULL; break;
+            case 4: ops.get_entry_layout = NULL; break;
+            default: ops.get_tick_hz = NULL; break;
+        }
+
+        pulse_generator_t pg;
+        pulse_generator_status_t status = pulse_generator_init(
+            &pg, &(pulse_generator_config_t){ .ops = &ops, .hw = &dma_hw, .dma = valid_dma_config() });
+
+        TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, status);
+    }
+}
+
+static void test_init_with_both_hook_groups_is_rejected(void)
+{
+    /* Which engine would run is ambiguous, so neither does. */
+    pulse_generator_ops_t ops = g_mock_ops;
+    ops.stream_start         = g_mock_dma_ops.stream_start;
+    ops.stream_stop          = g_mock_dma_ops.stream_stop;
+    ops.get_stream_remaining = g_mock_dma_ops.get_stream_remaining;
+    ops.get_period_max       = g_mock_dma_ops.get_period_max;
+    ops.get_entry_layout     = g_mock_dma_ops.get_entry_layout;
+
+    pulse_generator_t pg;
+    pulse_generator_status_t status = pulse_generator_init(
+        &pg, &(pulse_generator_config_t){ .ops = &ops, .hw = &hw, .dma = valid_dma_config() });
+
+    TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, status);
+}
+
+static void test_init_with_no_hook_group_is_rejected(void)
+{
+    pulse_generator_ops_t ops = { .get_tick_hz = g_mock_ops.get_tick_hz };
+
+    pulse_generator_t pg;
+    pulse_generator_status_t status = pulse_generator_init(
+        &pg, &(pulse_generator_config_t){ .ops = &ops, .hw = &hw });
+
+    TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, status);
+}
+
+static void test_init_with_compare_table_ignores_the_dma_config(void)
+{
+    pulse_generator_t pg;
+
+    /* entries = 3 would be rejected on the DMA engine. */
+    pulse_generator_status_t status = pulse_generator_init(
+        &pg, &(pulse_generator_config_t){ .ops = &g_mock_ops, .hw = &hw, .dma = { .entries = 3 } });
+
+    TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, status);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -121,9 +197,13 @@ int main(void)
     RUN_TEST(test_init_with_null_pg_returns_invalid_param);
     RUN_TEST(test_init_with_null_config_returns_invalid_param);
     RUN_TEST(test_init_with_null_ops_returns_invalid_param);
-    RUN_TEST(test_init_with_any_mandatory_hook_missing_is_rejected);
+    RUN_TEST(test_init_with_any_compare_hook_missing_is_rejected);
     RUN_TEST(test_init_accepts_a_platform_without_per_output_state);
     RUN_TEST(test_init_calls_no_hook);
     RUN_TEST(test_init_clears_state_left_by_a_previous_movement);
+    RUN_TEST(test_init_with_any_dma_hook_missing_is_rejected);
+    RUN_TEST(test_init_with_both_hook_groups_is_rejected);
+    RUN_TEST(test_init_with_no_hook_group_is_rejected);
+    RUN_TEST(test_init_with_compare_table_ignores_the_dma_config);
     return UNITY_END();
 }
