@@ -538,7 +538,9 @@ typedef struct {
     /* Source state: set when a movement starts, advanced by every fill. The
        period is tick_hz / frequency_hz, kept as a whole part plus a
        remainder carried from one period to the next, so that the average
-       frequency is exact. */
+       frequency is exact. FIXED_COUNT runs dry at pulse_target; CONTINUOUS
+       never does, and switches to a new frequency only where a period
+       starts, with no carry. */
     uint32_t period_ticks;     /* whole part of the period */
     uint32_t period_remainder; /* tick_hz % frequency_hz */
     uint32_t period_divisor;   /* frequency_hz */
@@ -547,6 +549,8 @@ typedef struct {
     uint32_t pulses_requested; /* FIXED_COUNT: the pulse_count it was started with */
     volatile uint32_t pulse_target; /* FIXED_COUNT: pulses after which the source runs dry;
                                        pushed back by reset_pulse_count() */
+    volatile uint32_t requested_frequency_hz; /* CONTINUOUS: set by set_frequency(), taken
+                                                 by the source where the next period starts */
 
     /* Splitting state: the period being cut into entries, which may
        straddle two fills. */
@@ -695,9 +699,7 @@ pulse_generator_status_t pulse_generator_start_fixed_count(
  *                     pulse_generator_start_fixed_count(). Can be changed
  *                     while running with pulse_generator_set_frequency().
  * @return Same codes as pulse_generator_start_fixed_count(), minus the ones
- *         about the pulse count;
- *         PULSE_GENERATOR_ERROR_NOT_SUPPORTED on an instance running on the
- *         DMA engine, which does not offer this mode yet.
+ *         about the pulse count.
  * @note Returns as soon as the hardware is armed. Never completes on its
  *       own, so PULSE_GENERATOR_EVENT_COMPLETE is never reported for this
  *       mode.
@@ -931,13 +933,19 @@ void pulse_generator_reset_pulse_count(pulse_generator_t *pg);
  *         PULSE_GENERATOR_ERROR_INVALID_STATE if no CONTINUOUS movement is
  *         in progress;
  *         PULSE_GENERATOR_ERROR_INVALID_PARAM on a null instance or an out
- *         of range frequency, with the previous frequency kept;
- *         PULSE_GENERATOR_ERROR_NOT_SUPPORTED on an instance running on the
- *         DMA engine, which does not offer this mode yet.
- * @note Touches no hardware: the new half period is applied by the next
- *       compare match, so the edge already scheduled still lands where it
- *       was going to. Cheap enough to call from a control loop on every
- *       cycle.
+ *         of range frequency, with the previous frequency kept.
+ * @note Touches no hardware, and is cheap enough to call from a control
+ *       loop on every cycle.
+ * @note Compare engine: the new half period is applied by the next compare
+ *       match, so the edge already scheduled still lands where it was going
+ *       to.
+ * @note DMA engine: the frequency is only stored, and the source takes it
+ *       at the start of the next period it writes into the buffer; a period
+ *       already begun is always finished at the old frequency. The change
+ *       therefore reaches the pin within one window, plus, when the period
+ *       being written then is split over several entries, whatever of it
+ *       remains. Of several calls made before then, the last one wins. The
+ *       average frequency is exact from the change on.
  */
 pulse_generator_status_t pulse_generator_set_frequency(pulse_generator_t *pg, uint32_t frequency_hz);
 

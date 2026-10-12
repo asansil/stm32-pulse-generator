@@ -78,3 +78,12 @@ add_executable(test_dma_fixed_count
 target_link_libraries(test_dma_fixed_count PRIVATE pulse_generator unity)
 
 add_test(NAME dma_fixed_count COMMAND test_dma_fixed_count)
+
+add_executable(test_dma_continuous
+    test_dma_continuous.c
+    mock_platform.c
+)
+
+target_link_libraries(test_dma_continuous PRIVATE pulse_generator unity)
+
+add_test(NAME dma_continuous COMMAND test_dma_continuous)
