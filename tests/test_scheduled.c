@@ -190,7 +190,7 @@ static void test_prepare_rejects_an_unknown_engine(void)
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_IDLE, pulse_generator_get_state(&pg));
 }
 
-static void test_prepare_with_the_dma_engine_is_not_supported_yet(void)
+static void test_prepare_with_the_dma_engine_on_a_compare_instance_is_not_supported(void)
 {
     pulse_generator_scheduled_config_t config = default_config();
     config.engine = PULSE_GENERATOR_ENGINE_DMA;
@@ -1012,7 +1012,7 @@ int main(void)
     RUN_TEST(test_prepare_rejects_a_capacity_below_two);
     RUN_TEST(test_prepare_rejects_a_low_watermark_not_below_the_capacity);
     RUN_TEST(test_prepare_rejects_an_unknown_engine);
-    RUN_TEST(test_prepare_with_the_dma_engine_is_not_supported_yet);
+    RUN_TEST(test_prepare_with_the_dma_engine_on_a_compare_instance_is_not_supported);
     RUN_TEST(test_prepare_rejects_a_counter_max_that_is_not_a_power_of_two_minus_one);
     RUN_TEST(test_a_rejected_config_touches_no_hook);
     RUN_TEST(test_prepare_when_already_armed_returns_invalid_state);

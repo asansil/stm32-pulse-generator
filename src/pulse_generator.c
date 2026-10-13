@@ -251,6 +251,40 @@ static pulse_generator_status_t start_timer_movement(
     return status;
 }
 
+/* --- Scheduled queue --- */
+
+/* Each index is read once, so the result is consistent even while the other
+   side moves its own: at worst one event out of date, never torn. The
+   capacity need not be a power of two, hence the explicit wrap rather than
+   a mask. */
+static size_t pending_events(const pulse_generator_t *pg)
+{
+    size_t head = pg->sched.queue_head;
+    size_t tail = pg->sched.queue_tail;
+
+    return (head >= tail) ? head - tail : pg->sched.queue_capacity - tail + head;
+}
+
+static size_t next_index(const pulse_generator_t *pg, size_t index)
+{
+    return (index + 1 == pg->sched.queue_capacity) ? 0 : index + 1;
+}
+
+/* Consumer side of the queue. The slot is read before tail is published,
+   so the producer cannot overwrite it while it is still being read. */
+static bool pop_event(pulse_generator_t *pg, uint32_t *interval)
+{
+    const size_t tail = pg->sched.queue_tail;
+    if (tail == pg->sched.queue_head) {
+        return false;
+    }
+
+    *interval = pg->sched.queue[tail];
+    pg->sched.queue_tail = next_index(pg, tail);
+
+    return true;
+}
+
 /* --- DMA engine: setup and buffer filling --- */
 
 #define US_PER_S 1000000u
@@ -330,21 +364,23 @@ static pulse_generator_status_t capture_dma_timing(pulse_generator_t *pg)
     return PULSE_GENERATOR_OK;
 }
 
+/* Whether the hardware can play a period of `ticks`: no shorter than the
+   minimum entry and, with a fixed width, long enough for the pulse to fall
+   before the next one rises. */
+static bool dma_period_is_playable(const pulse_generator_t *pg, uint32_t ticks)
+{
+    if (ticks < pg->dma.min_entry_ticks) {
+        return false;
+    }
+
+    return pg->dma.pulse_shape != PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH || ticks > pg->dma.width_ticks;
+}
+
 /* Checks a frequency against what the source can play, on the whole part
    of its period: the shortest period it will ever emit. */
 static pulse_generator_status_t check_dma_frequency(const pulse_generator_t *pg, uint32_t frequency_hz)
 {
-    if (frequency_hz == 0) {
-        return PULSE_GENERATOR_ERROR_INVALID_PARAM;
-    }
-
-    const uint32_t ticks = pg->tick_hz / frequency_hz;
-    if (ticks < pg->dma.min_entry_ticks) {
-        return PULSE_GENERATOR_ERROR_INVALID_PARAM;
-    }
-
-    /* With a fixed width, a pulse must fall before the next one rises. */
-    if (pg->dma.pulse_shape == PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH && ticks <= pg->dma.width_ticks) {
+    if (frequency_hz == 0 || !dma_period_is_playable(pg, pg->tick_hz / frequency_hz)) {
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
@@ -368,6 +404,42 @@ static uint32_t pulse_high_ticks(const pulse_generator_t *pg, uint32_t period_ti
                                                                              : period_ticks / 2u;
 }
 
+/* The SCHEDULED source. The period that starts at the rise of pulse k lasts
+   until the rise of k+1, so it is the next event's interval, and pulse k is
+   high for its share of it; the first event's interval is a lead-in period
+   with no pulse. With no next event, pulse k is the last one: it gets its
+   own interval, and the movement ends complete or as an underrun depending
+   on whether finish had been requested by then. Returns false once dry. */
+static bool next_scheduled_period(pulse_generator_t *pg, uint32_t *length, uint32_t *high)
+{
+    pulse_generator_sched_t *sched = &pg->sched;
+
+    if (sched->source_dry) {
+        return false;
+    }
+
+    if (sched->lead_in) {
+        sched->lead_in = false;
+        *length = sched->interval_current;
+        *high = 0;
+        return true;
+    }
+
+    uint32_t interval;
+    if (pop_event(pg, &interval)) {
+        sched->interval_current = interval;
+    } else {
+        sched->source_dry = true;
+        sched->stop_event = sched->finish_requested ? PULSE_GENERATOR_EVENT_COMPLETE
+                                                    : PULSE_GENERATOR_EVENT_UNDERRUN;
+    }
+
+    *length = sched->interval_current;
+    *high = pulse_high_ticks(pg, sched->interval_current);
+
+    return true;
+}
+
 /* The FIXED_COUNT and CONTINUOUS source: the same period, one tick longer
    whenever the carried remainder adds up to a whole one, so that the
    periods average out to tick_hz / frequency_hz exactly. FIXED_COUNT runs
@@ -377,6 +449,10 @@ static uint32_t pulse_high_ticks(const pulse_generator_t *pg, uint32_t period_ti
 static bool next_period(pulse_generator_t *pg, uint32_t *length, uint32_t *high)
 {
     pulse_generator_dma_t *dma = &pg->dma;
+
+    if (pg->mode == PULSE_GENERATOR_MODE_SCHEDULED) {
+        return next_scheduled_period(pg, length, high);
+    }
 
     if (pg->mode == PULSE_GENERATOR_MODE_FIXED_COUNT) {
         if (dma->pulses_written >= dma->pulse_target) {
@@ -575,9 +651,38 @@ static uint32_t falls_finished(const pulse_generator_t *pg)
    final entry included. Never the case in CONTINUOUS. */
 static bool source_is_dry(const pulse_generator_t *pg)
 {
-    return pg->mode == PULSE_GENERATOR_MODE_FIXED_COUNT &&
-           pg->dma.pulses_written >= pg->dma.pulse_target &&
-           pg->dma.split_index == pg->dma.split_count;
+    const bool period_written = pg->dma.split_index == pg->dma.split_count;
+
+    if (pg->mode == PULSE_GENERATOR_MODE_FIXED_COUNT) {
+        return pg->dma.pulses_written >= pg->dma.pulse_target && period_written;
+    }
+    if (pg->mode == PULSE_GENERATOR_MODE_SCHEDULED) {
+        return pg->sched.source_dry && period_written;
+    }
+
+    return false;
+}
+
+/* Fills the whole buffer from the source, already set up by the caller, and
+   starts the stream. On failure the caller rolls the instance back. */
+static pulse_generator_status_t fill_and_start_stream(pulse_generator_t *pg)
+{
+    pg->dma.split_count = 0;
+    pg->dma.split_index = 0;
+    pg->dma.falls_written = 0;
+    pg->dma.count_base = 0;
+    fill_half(pg, 0);
+    fill_half(pg, 1);
+    /* What the first fills overwrote was never played. */
+    pg->dma.overwritten_tail = 0;
+
+    /* Published before the stream starts: its first half-transfer can come
+       before stream_start() returns, and must find the instance RUNNING. */
+    pg->edge_count = 0;
+    pg->state = PULSE_GENERATOR_STATE_RUNNING;
+
+    return pg->ops->stream_start(pg->hw, pg->dma.buffer,
+                                 pg->dma.entries * pg->dma.layout.words_per_entry);
 }
 
 static pulse_generator_status_t start_dma_movement(
@@ -606,22 +711,8 @@ static pulse_generator_status_t start_dma_movement(
     pg->dma.pulses_written = 0;
     pg->dma.pulses_requested = pulse_count;
     pg->dma.pulse_target = pulse_count;
-    pg->dma.split_count = 0;
-    pg->dma.split_index = 0;
-    pg->dma.falls_written = 0;
-    pg->dma.count_base = 0;
-    fill_half(pg, 0);
-    fill_half(pg, 1);
-    /* What the first fills overwrote was never played. */
-    pg->dma.overwritten_tail = 0;
 
-    /* Published before the stream starts: its first half-transfer can come
-       before stream_start() returns, and must find the instance RUNNING. */
-    pg->edge_count = 0;
-    pg->state = PULSE_GENERATOR_STATE_RUNNING;
-
-    status = pg->ops->stream_start(pg->hw, pg->dma.buffer,
-                                   pg->dma.entries * pg->dma.layout.words_per_entry);
+    status = fill_and_start_stream(pg);
     if (status != PULSE_GENERATOR_OK) {
         pg->state = PULSE_GENERATOR_STATE_IDLE;
     }
@@ -717,45 +808,19 @@ static bool is_scheduled(const pulse_generator_t *pg)
            pg->state != PULSE_GENERATOR_STATE_IDLE;
 }
 
-/* Each index is read once, so the result is consistent even while the other
-   side moves its own: at worst one event out of date, never torn. The
-   capacity need not be a power of two, hence the explicit wrap rather than
-   a mask. */
-static size_t pending_events(const pulse_generator_t *pg)
-{
-    size_t head = pg->sched.queue_head;
-    size_t tail = pg->sched.queue_tail;
-
-    return (head >= tail) ? head - tail : pg->sched.queue_capacity - tail + head;
-}
-
-static size_t next_index(const pulse_generator_t *pg, size_t index)
-{
-    return (index + 1 == pg->sched.queue_capacity) ? 0 : index + 1;
-}
-
-/* The pulse is high for interval / 2 and low for the rest, which is never
-   shorter, so checking the first half covers both. */
+/* Compare engine: the pulse is high for interval / 2 and low for the rest,
+   which is never shorter, so checking the first half covers both. DMA
+   engine: an interval is a period, with no upper limit since long ones are
+   split. */
 static bool interval_is_valid(const pulse_generator_t *pg, uint32_t interval)
 {
+    if (pg->dma_engine) {
+        return dma_period_is_playable(pg, interval);
+    }
+
     return interval >= 2 &&
            interval / 2 >= pg->sched.min_interval_ticks &&
            interval <= pg->counter_max;
-}
-
-/* Consumer side of the queue. The slot is read before tail is published,
-   so the producer cannot overwrite it while it is still being read. */
-static bool pop_event(pulse_generator_t *pg, uint32_t *interval)
-{
-    const size_t tail = pg->sched.queue_tail;
-    if (tail == pg->sched.queue_head) {
-        return false;
-    }
-
-    *interval = pg->sched.queue[tail];
-    pg->sched.queue_tail = next_index(pg, tail);
-
-    return true;
 }
 
 /* Every way out of a SCHEDULED movement lands here, back in ARMED. The
@@ -937,22 +1002,25 @@ pulse_generator_status_t pulse_generator_prepare_scheduled(
         return PULSE_GENERATOR_ERROR_INVALID_STATE;
     }
 
-    if (pg->dma_engine) {
-        return PULSE_GENERATOR_ERROR_NOT_SUPPORTED; /* until the scheduled source lands */
-    }
-
+    /* The ops table chose the engine; the config must agree with it. */
     switch (config->engine) {
     case PULSE_GENERATOR_ENGINE_ISR:
+        if (pg->dma_engine) {
+            return PULSE_GENERATOR_ERROR_INVALID_PARAM;
+        }
         break;
     case PULSE_GENERATOR_ENGINE_DMA:
-        return PULSE_GENERATOR_ERROR_NOT_SUPPORTED;
+        if (!pg->dma_engine) {
+            return PULSE_GENERATOR_ERROR_NOT_SUPPORTED;
+        }
+        break;
     default:
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
     /* Captured here rather than at start, so that queue_events() can check
-       every interval against counter_max as it comes in. */
-    pulse_generator_status_t status = capture_timing(pg);
+       every interval as it comes in. */
+    pulse_generator_status_t status = pg->dma_engine ? capture_dma_timing(pg) : capture_timing(pg);
     if (status != PULSE_GENERATOR_OK) {
         return status;
     }
@@ -1009,6 +1077,29 @@ size_t pulse_generator_queue_events(pulse_generator_t *pg, const uint32_t *inter
     return accepted;
 }
 
+/* The DMA engine starts at once: the first event's interval becomes the
+   lead-in period, and the whole buffer is filled before the stream starts.
+   While ARMED nothing else consumes, so the tail the fill moved can be moved
+   back on a failed start, leaving the queue as it was. */
+static pulse_generator_status_t start_scheduled_dma(pulse_generator_t *pg)
+{
+    const size_t tail = pg->sched.queue_tail;
+
+    pg->sched.interval_current = pg->sched.queue[tail];
+    pg->sched.queue_tail = next_index(pg, tail);
+    pg->sched.lead_in = true;
+    pg->sched.source_dry = false;
+    pg->sched.low_watermark_armed = true;
+
+    pulse_generator_status_t status = fill_and_start_stream(pg);
+    if (status != PULSE_GENERATOR_OK) {
+        pg->state = PULSE_GENERATOR_STATE_ARMED;
+        pg->sched.queue_tail = tail;
+    }
+
+    return status;
+}
+
 pulse_generator_status_t pulse_generator_start_scheduled(pulse_generator_t *pg, uint32_t start_tick)
 {
     if (pg == NULL) {
@@ -1025,6 +1116,11 @@ pulse_generator_status_t pulse_generator_start_scheduled(pulse_generator_t *pg, 
     const size_t pending = pending_events(pg);
     if (pending == 0 || (pending == 1 && !pg->sched.finish_requested)) {
         return PULSE_GENERATOR_ERROR_INVALID_STATE;
+    }
+
+    /* No shared counter to start from: start_tick is the compare engine's. */
+    if (pg->dma_engine) {
+        return start_scheduled_dma(pg);
     }
 
     /* Peeked rather than popped, so a start rejected here leaves the queue
@@ -1131,12 +1227,12 @@ pulse_generator_status_t pulse_generator_stop(pulse_generator_t *pg)
 
     if (pg->mode == PULSE_GENERATOR_MODE_SCHEDULED) {
         /* Back to ARMED rather than IDLE, so a restart is one more
-           start_scheduled(). An instance that was only ARMED has no channel
+           start_scheduled(). An instance that was only ARMED has no output
            running, but still gets its queue flushed. No event: a stop is
            neither a completion nor an underrun. */
         pulse_generator_status_t status = PULSE_GENERATOR_OK;
         if (pg->state == PULSE_GENERATOR_STATE_RUNNING) {
-            status = pg->ops->channel_stop(pg->hw);
+            status = pg->dma_engine ? pg->ops->stream_stop(pg->hw) : pg->ops->channel_stop(pg->hw);
         }
 
         end_movement(pg);
@@ -1233,30 +1329,29 @@ pulse_generator_status_t pulse_generator_notify_compare_match(pulse_generator_t 
 
 /* --- DMA engine: stream interrupts --- */
 
-/* The stream is already reading the half that was to be refilled: writing it
-   now would tear entries or replay old ones, extra pulses being the worst
-   failure a step output can have. Stop instead, with the pin low. */
-static pulse_generator_status_t stop_on_late_refill(pulse_generator_t *pg)
+/* Stops the stream and ends the movement with `event`: FIXED_COUNT and
+   CONTINUOUS go back to IDLE, SCHEDULED to ARMED with its queue flushed and
+   an underrun counted. Returns `status`, unless stopping the stream failed:
+   then the platform's error says more. */
+static pulse_generator_status_t end_dma_movement(pulse_generator_t *pg,
+                                                 pulse_generator_event_t event,
+                                                 pulse_generator_status_t status)
 {
     const pulse_generator_status_t stop_status = pg->ops->stream_stop(pg->hw);
-    pg->state = PULSE_GENERATOR_STATE_IDLE;
-    pg->edge_count = 0;
 
-    emit_event(pg, PULSE_GENERATOR_EVENT_UNDERRUN);
+    if (pg->mode == PULSE_GENERATOR_MODE_SCHEDULED) {
+        end_movement(pg);
+        if (event == PULSE_GENERATOR_EVENT_UNDERRUN) {
+            pg->sched.underrun_count++;
+        }
+    } else {
+        pg->state = PULSE_GENERATOR_STATE_IDLE;
+        pg->edge_count = 0;
+    }
 
-    return (stop_status != PULSE_GENERATOR_OK) ? stop_status : PULSE_GENERATOR_ERROR_UNDERRUN;
-}
+    emit_event(pg, event);
 
-/* The movement has finished playing: stop the stream and report it. */
-static pulse_generator_status_t complete_dma_movement(pulse_generator_t *pg)
-{
-    const pulse_generator_status_t status = pg->ops->stream_stop(pg->hw);
-    pg->state = PULSE_GENERATOR_STATE_IDLE;
-    pg->edge_count = 0;
-
-    emit_event(pg, PULSE_GENERATOR_EVENT_COMPLETE);
-
-    return status;
+    return (stop_status != PULSE_GENERATOR_OK) ? stop_status : status;
 }
 
 /* One half of the buffer has been fetched and can be refilled, as long as
@@ -1274,18 +1369,33 @@ static pulse_generator_status_t on_half_fetched(pulse_generator_t *pg, size_t ha
        other half after this one was padded. Checked before lateness, since a
        buffer of padding alone can be replayed harmlessly. */
     if (!pg->dma.half_has_pulses[0] && !pg->dma.half_has_pulses[1] && source_is_dry(pg)) {
-        return complete_dma_movement(pg);
+        /* A SCHEDULED source knows how it ran dry; the others only complete. */
+        const pulse_generator_event_t event = (pg->mode == PULSE_GENERATOR_MODE_SCHEDULED)
+                                                  ? pg->sched.stop_event
+                                                  : PULSE_GENERATOR_EVENT_COMPLETE;
+        return end_dma_movement(pg, event,
+                                event == PULSE_GENERATOR_EVENT_UNDERRUN ? PULSE_GENERATOR_ERROR_UNDERRUN
+                                                                        : PULSE_GENERATOR_OK);
     }
 
     const size_t half = pg->dma.entries / 2u;
     const size_t first = half_index * half;
     const size_t next = next_fetch_entry(pg);
 
+    /* The stream is already reading the half to be refilled: writing it now
+       would tear entries or replay old ones, extra pulses being the worst
+       failure a step output can have. Stop instead, with the pin low. */
     if (next >= first && next < first + half) {
-        return stop_on_late_refill(pg);
+        return end_dma_movement(pg, PULSE_GENERATOR_EVENT_UNDERRUN, PULSE_GENERATOR_ERROR_UNDERRUN);
     }
 
     fill_half(pg, half_index);
+
+    /* Once per refill, after it has taken its events. Not once the source
+       is dry: the producer can no longer change how this movement ends. */
+    if (pg->mode == PULSE_GENERATOR_MODE_SCHEDULED && !pg->sched.source_dry) {
+        signal_low_watermark_if_needed(pg);
+    }
 
     return PULSE_GENERATOR_OK;
 }
