@@ -160,24 +160,6 @@ static void test_init_accepts_fixed_width_with_a_width(void)
 
 /* --- modes the DMA engine does not offer yet --- */
 
-static void test_start_continuous_is_not_supported(void)
-{
-    pulse_generator_t pg;
-    init_dma_instance(&pg);
-
-    TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_NOT_SUPPORTED, pulse_generator_start_continuous(&pg, 1000));
-    TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_IDLE, pulse_generator_get_state(&pg));
-    TEST_ASSERT_EQUAL(0, hw.stream_start_call_count);
-}
-
-static void test_set_frequency_is_not_supported(void)
-{
-    pulse_generator_t pg;
-    init_dma_instance(&pg);
-
-    TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_NOT_SUPPORTED, pulse_generator_set_frequency(&pg, 1000));
-}
-
 static void test_prepare_scheduled_is_not_supported(void)
 {
     pulse_generator_t pg;
@@ -1092,8 +1074,6 @@ int main(void)
     RUN_TEST(test_init_rejects_an_unknown_pulse_shape);
     RUN_TEST(test_init_rejects_fixed_width_without_a_width);
     RUN_TEST(test_init_accepts_fixed_width_with_a_width);
-    RUN_TEST(test_start_continuous_is_not_supported);
-    RUN_TEST(test_set_frequency_is_not_supported);
     RUN_TEST(test_prepare_scheduled_is_not_supported);
     RUN_TEST(test_get_now_ticks_reads_zero);
     RUN_TEST(test_notify_compare_match_is_a_no_op);

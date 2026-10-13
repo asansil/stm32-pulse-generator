@@ -25,11 +25,12 @@ it implements:
 - **DMA engine** — one timer per output in PWM mode with ARR/CCR preload,
   fed one entry per update event by a circular DMA stream that the library
   refills half at a time. No interrupt per edge, and the latency of every
-  change is bounded by a configurable window. Runs fixed count today;
-  continuous and scheduled are being migrated to it.
+  change is bounded by a configurable window (plus, for a frequency change,
+  the rest of a period in progress longer than that). Runs fixed count and
+  continuous today; scheduled is being migrated to it.
 - **Compare engine** — a free-running counter in output-compare toggle
   mode, one compare interrupt per edge. Supports all three modes, and will
-  be removed once continuous and scheduled run on the DMA engine.
+  be removed once scheduled runs on the DMA engine.
 
 ## Repository layout
 
@@ -38,9 +39,9 @@ it implements:
 - `tests/` — host unit tests (Unity + CTest), no hardware required.
 - `examples/` — reference firmware projects that exercise the library on
   real hardware, one per mode, for the STM32F407 Discovery
-  (`stm32f407_discovery_fixed_count` on the DMA engine,
-  `stm32f407_discovery_continuous` and `stm32f407_discovery_scheduled_isr`
-  on the compare engine). Within each example, `Core/` is STM32CubeMX-owned
+  (`stm32f407_discovery_fixed_count` and `stm32f407_discovery_continuous`
+  on the DMA engine, `stm32f407_discovery_scheduled_isr` on the compare
+  engine). Within each example, `Core/` is STM32CubeMX-owned
   (regenerated from the `.ioc`, hand edits only inside `USER CODE`
   blocks) and `App/` holds the hand-written integration code (e.g. the
   real `pulse_generator_ops_t`), organized in cohesive subfolders.

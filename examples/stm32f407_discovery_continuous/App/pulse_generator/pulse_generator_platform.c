@@ -37,38 +37,55 @@ pulse_generator_status_t stm32f4_pg_hw_init(stm32f4_pg_hw_t *hw,
     }
 
     TIM_TypeDef *tim = htim->Instance;
+    const DMA_HandleTypeDef *hdma = htim->hdma[TIM_DMA_ID_UPDATE];
 
     volatile uint32_t *ccr;
     volatile uint32_t *ccmr;
     uint32_t ocm_mask;
     uint32_t ocm_shift;
-    uint32_t cc_flag;
+    uint32_t ccer_mask;
+    uint32_t burst_length;
+    size_t   words_per_entry;
 
-    /* The TIM_OCMODE_* constants are expressed in OC1M's position, so the
-       channels living in the upper half of a CCMR register need them shifted
-       by 8. CCMR1 holds channels 1-2, CCMR2 holds 3-4. */
+    /* The TIM_OCMODE_* constants and OC1PE are expressed in OC1's position,
+       so the channels living in the upper half of a CCMR register need them
+       shifted by 8. CCMR1 holds channels 1-2, CCMR2 holds 3-4.
+       A DMA burst writes consecutive registers from its base, so an entry
+       starting at ARR runs ARR, RCR, CCR1, ... up to this channel's CCR:
+       three words for channel 1 and one more per channel after it. RCR is
+       reserved on TIM2-TIM5 and only ever gets the library's 0. */
     switch (channel) {
         case TIM_CHANNEL_1:
             ccr = &tim->CCR1; ccmr = &tim->CCMR1;
-            ocm_mask = TIM_CCMR1_OC1M; ocm_shift = 0U; cc_flag = TIM_FLAG_CC1;
+            ocm_mask = TIM_CCMR1_OC1M; ocm_shift = 0U; ccer_mask = TIM_CCER_CC1E;
+            burst_length = TIM_DMABURSTLENGTH_3TRANSFERS; words_per_entry = 3U;
             break;
         case TIM_CHANNEL_2:
             ccr = &tim->CCR2; ccmr = &tim->CCMR1;
-            ocm_mask = TIM_CCMR1_OC2M; ocm_shift = 8U; cc_flag = TIM_FLAG_CC2;
+            ocm_mask = TIM_CCMR1_OC2M; ocm_shift = 8U; ccer_mask = TIM_CCER_CC2E;
+            burst_length = TIM_DMABURSTLENGTH_4TRANSFERS; words_per_entry = 4U;
             break;
         case TIM_CHANNEL_3:
             ccr = &tim->CCR3; ccmr = &tim->CCMR2;
-            ocm_mask = TIM_CCMR2_OC3M; ocm_shift = 0U; cc_flag = TIM_FLAG_CC3;
+            ocm_mask = TIM_CCMR2_OC3M; ocm_shift = 0U; ccer_mask = TIM_CCER_CC3E;
+            burst_length = TIM_DMABURSTLENGTH_5TRANSFERS; words_per_entry = 5U;
             break;
         case TIM_CHANNEL_4:
             ccr = &tim->CCR4; ccmr = &tim->CCMR2;
-            ocm_mask = TIM_CCMR2_OC4M; ocm_shift = 8U; cc_flag = TIM_FLAG_CC4;
+            ocm_mask = TIM_CCMR2_OC4M; ocm_shift = 8U; ccer_mask = TIM_CCER_CC4E;
+            burst_length = TIM_DMABURSTLENGTH_6TRANSFERS; words_per_entry = 6U;
             break;
         default:
             return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
-    if (!IS_TIM_CCX_INSTANCE(tim, channel)) {
+    if (!IS_TIM_CCX_INSTANCE(tim, channel) || !IS_TIM_DMABURST_INSTANCE(tim)) {
+        return PULSE_GENERATOR_ERROR_INVALID_PARAM;
+    }
+
+    /* Without a circular stream the DMA would stop after one lap of the
+       buffer and the library would never hear about it. */
+    if (hdma == NULL || hdma->Init.Mode != DMA_CIRCULAR) {
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
@@ -83,68 +100,93 @@ pulse_generator_status_t stm32f4_pg_hw_init(stm32f4_pg_hw_t *hw,
     hw->ccmr = ccmr;
     hw->ocm_mask = ocm_mask;
     hw->ocm_shift = ocm_shift;
-    hw->cc_flag = cc_flag;
-    hw->counter_max = IS_TIM_32B_COUNTER_INSTANCE(tim) ? 0xFFFFFFFFU : 0xFFFFU;
+    hw->ccer_mask = ccer_mask;
+    hw->burst_length = burst_length;
+    hw->layout.words_per_entry = words_per_entry;
+    hw->layout.period_index = 0U;
+    hw->layout.compare_index = words_per_entry - 1U;
+    hw->period_max = IS_TIM_32B_COUNTER_INSTANCE(tim) ? 0xFFFFFFFFU : 0xFFFFU;
     hw->tick_hz = tick_hz;
 
     return PULSE_GENERATOR_OK;
 }
 
-static pulse_generator_status_t stm32f4_channel_start(void *hw_ptr, uint32_t first_compare)
+static pulse_generator_status_t stm32f4_stream_start(void *hw_ptr,
+                                                     const volatile uint32_t *buffer,
+                                                     size_t words)
 {
     stm32f4_pg_hw_t *hw = (stm32f4_pg_hw_t *)hw_ptr;
+    TIM_TypeDef *tim = hw->htim->Instance;
 
-    /* The library schedules every match relative to the previous one and
-       wraps the arithmetic at counter_max, which requires the counter to run
-       over its full range whatever Counter Period was configured. */
-    __HAL_TIM_SET_AUTORELOAD(hw->htim, hw->counter_max);
+    /* NDTR, the stream's transfer count, is 16 bits wide. */
+    if (buffer == NULL || words == 0U || words > 0xFFFFU) {
+        return PULSE_GENERATOR_ERROR_INVALID_PARAM;
+    }
 
-    /* Force OCxREF low before (re)enabling the output: a stop() in the
-       middle of a pulse leaves it high, which would make the pin jump high
-       as soon as the channel is enabled and invert every edge the library
-       counts afterwards. */
-    MODIFY_REG(*hw->ccmr, hw->ocm_mask, TIM_OCMODE_FORCED_INACTIVE << hw->ocm_shift);
-    MODIFY_REG(*hw->ccmr, hw->ocm_mask, TIM_OCMODE_TOGGLE << hw->ocm_shift);
+    /* Counter stopped and OCxREF held low while priming. URS cleared: HAL's
+       TIM_Base_SetConfig() leaves it set, and with it the UG below would
+       raise no DMA request. ARR and CCR preload on whatever the .ioc says,
+       so that every entry takes effect a whole period at a time. */
+    CLEAR_BIT(tim->CR1, TIM_CR1_CEN | TIM_CR1_URS);
+    SET_BIT(tim->CR1, TIM_CR1_ARPE);
+    MODIFY_REG(*hw->ccmr, hw->ocm_mask | (TIM_CCMR1_OC1PE << hw->ocm_shift),
+               (TIM_OCMODE_FORCED_INACTIVE | TIM_CCMR1_OC1PE) << hw->ocm_shift);
 
-    /* As late as possible: the library measured first_compare from the
-       counter just before calling, so everything done in between eats into
-       the first half period. */
-    *hw->ccr = first_compare;
+    /* Priming period: as long as entry 0, so it is playable, with no pulse. */
+    tim->ARR = buffer[hw->layout.period_index];
+    *hw->ccr = 0U;
 
-    /* Drop any compare flag left over from a previous movement, so enabling
-       the interrupt does not report a toggle that never happened. */
-    __HAL_TIM_CLEAR_FLAG(hw->htim, hw->cc_flag);
+    if (HAL_TIM_DMABurst_MultiWriteStart(hw->htim, TIM_DMABASE_ARR, TIM_DMA_UPDATE,
+                                         (const uint32_t *)buffer, hw->burst_length,
+                                         (uint32_t)words) != HAL_OK) {
+        /* A failed stream start leaves the HAL's burst state BUSY, which
+           would refuse every later start. */
+        (void)HAL_TIM_DMABurst_WriteStop(hw->htim, TIM_DMA_UPDATE);
+        return PULSE_GENERATOR_ERROR;
+    }
 
-    return (HAL_TIM_OC_Start_IT(hw->htim, hw->channel) == HAL_OK) ? PULSE_GENERATOR_OK
-                                                                  : PULSE_GENERATOR_ERROR;
-}
+    /* UG moves the priming period into the active registers and resets the
+       counter, and its DMA request writes entry 0 into the preload ones.
+       The first update event then starts entry 0 and fetches entry 1: entry
+       k+1 is fetched at the update event that starts entry k, as the
+       contract requires. */
+    tim->EGR = TIM_EGR_UG;
 
-static pulse_generator_status_t stm32f4_channel_stop(void *hw_ptr)
-{
-    stm32f4_pg_hw_t *hw = (stm32f4_pg_hw_t *)hw_ptr;
-
-    /* HAL_TIM_OC_Stop_IT leaves the counter running while other channels of
-       the same timer are active, as the contract requires, but clears CEN
-       along with the last one: with a single channel the counter stops at
-       the end of every movement, and channel_start() restarts it. */
-    return (HAL_TIM_OC_Stop_IT(hw->htim, hw->channel) == HAL_OK) ? PULSE_GENERATOR_OK
-                                                                 : PULSE_GENERATOR_ERROR;
-}
-
-static pulse_generator_status_t stm32f4_set_compare(void *hw_ptr, uint32_t compare)
-{
-    stm32f4_pg_hw_t *hw = (stm32f4_pg_hw_t *)hw_ptr;
-
-    *hw->ccr = compare;
+    /* Only now, with CCR = 0 active, can OCxREF follow the PWM: switching
+       earlier would compare against whatever the last movement left. */
+    MODIFY_REG(*hw->ccmr, hw->ocm_mask, TIM_OCMODE_PWM1 << hw->ocm_shift);
+    SET_BIT(tim->CCER, hw->ccer_mask);
+    SET_BIT(tim->CR1, TIM_CR1_CEN);
 
     return PULSE_GENERATOR_OK;
 }
 
-static uint32_t stm32f4_get_counter(void *hw_ptr)
+static pulse_generator_status_t stm32f4_stream_stop(void *hw_ptr)
+{
+    stm32f4_pg_hw_t *hw = (stm32f4_pg_hw_t *)hw_ptr;
+    TIM_TypeDef *tim = hw->htim->Instance;
+
+    /* Pin low at once, mid-pulse included. The channel stays enabled with
+       OCxREF forced inactive, so the pin is driven low rather than left to
+       the pull-down. */
+    MODIFY_REG(*hw->ccmr, hw->ocm_mask, TIM_OCMODE_FORCED_INACTIVE << hw->ocm_shift);
+
+    /* HAL_DMA_Abort_IT() underneath only clears the stream's enable bit, so
+       this is safe from the stream's own interrupt: HAL_DMA_IRQHandler()
+       completes the abort afterwards. On a stream already stopped it does
+       nothing. */
+    (void)HAL_TIM_DMABurst_WriteStop(hw->htim, TIM_DMA_UPDATE);
+
+    CLEAR_BIT(tim->CR1, TIM_CR1_CEN);
+
+    return PULSE_GENERATOR_OK;
+}
+
+static size_t stm32f4_get_stream_remaining(void *hw_ptr)
 {
     stm32f4_pg_hw_t *hw = (stm32f4_pg_hw_t *)hw_ptr;
 
-    return __HAL_TIM_GET_COUNTER(hw->htim);
+    return __HAL_DMA_GET_COUNTER(hw->htim->hdma[TIM_DMA_ID_UPDATE]);
 }
 
 static uint32_t stm32f4_get_tick_hz(void *hw_ptr)
@@ -152,16 +194,24 @@ static uint32_t stm32f4_get_tick_hz(void *hw_ptr)
     return ((const stm32f4_pg_hw_t *)hw_ptr)->tick_hz;
 }
 
-static uint32_t stm32f4_get_counter_max(void *hw_ptr)
+static uint32_t stm32f4_get_period_max(void *hw_ptr)
 {
-    return ((const stm32f4_pg_hw_t *)hw_ptr)->counter_max;
+    return ((const stm32f4_pg_hw_t *)hw_ptr)->period_max;
+}
+
+static pulse_generator_status_t stm32f4_get_entry_layout(void *hw_ptr,
+                                                         pulse_generator_entry_layout_t *layout)
+{
+    *layout = ((const stm32f4_pg_hw_t *)hw_ptr)->layout;
+
+    return PULSE_GENERATOR_OK;
 }
 
 const pulse_generator_ops_t g_stm32f4_pg_ops = {
-    .channel_start   = stm32f4_channel_start,
-    .channel_stop    = stm32f4_channel_stop,
-    .set_compare     = stm32f4_set_compare,
-    .get_counter     = stm32f4_get_counter,
-    .get_tick_hz     = stm32f4_get_tick_hz,
-    .get_counter_max = stm32f4_get_counter_max,
+    .get_tick_hz          = stm32f4_get_tick_hz,
+    .stream_start         = stm32f4_stream_start,
+    .stream_stop          = stm32f4_stream_stop,
+    .get_stream_remaining = stm32f4_get_stream_remaining,
+    .get_period_max       = stm32f4_get_period_max,
+    .get_entry_layout     = stm32f4_get_entry_layout,
 };

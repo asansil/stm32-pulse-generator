@@ -330,10 +330,9 @@ static pulse_generator_status_t capture_dma_timing(pulse_generator_t *pg)
     return PULSE_GENERATOR_OK;
 }
 
-/* Sets the source's period from a frequency: the whole ticks, plus the
-   remainder next_period() carries over. Checked on the whole part, the
-   shortest period it will ever emit. */
-static pulse_generator_status_t set_dma_period(pulse_generator_t *pg, uint32_t frequency_hz)
+/* Checks a frequency against what the source can play, on the whole part
+   of its period: the shortest period it will ever emit. */
+static pulse_generator_status_t check_dma_frequency(const pulse_generator_t *pg, uint32_t frequency_hz)
 {
     if (frequency_hz == 0) {
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
@@ -349,12 +348,18 @@ static pulse_generator_status_t set_dma_period(pulse_generator_t *pg, uint32_t f
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
-    pg->dma.period_ticks = ticks;
+    return PULSE_GENERATOR_OK;
+}
+
+/* Sets the source's period from a frequency already checked: the whole
+   ticks, plus the remainder next_period() carries over, starting from no
+   carry. */
+static void set_dma_period(pulse_generator_t *pg, uint32_t frequency_hz)
+{
+    pg->dma.period_ticks = pg->tick_hz / frequency_hz;
     pg->dma.period_remainder = pg->tick_hz % frequency_hz;
     pg->dma.period_divisor = frequency_hz;
     pg->dma.period_carry = 0;
-
-    return PULSE_GENERATOR_OK;
 }
 
 static uint32_t pulse_high_ticks(const pulse_generator_t *pg, uint32_t period_ticks)
@@ -363,16 +368,26 @@ static uint32_t pulse_high_ticks(const pulse_generator_t *pg, uint32_t period_ti
                                                                              : period_ticks / 2u;
 }
 
-/* The FIXED_COUNT source: the same period until the target has been
-   written, one tick longer whenever the carried remainder adds up to a
-   whole one, so that the periods average out to tick_hz / frequency_hz
-   exactly. Returns false once it has run dry. */
+/* The FIXED_COUNT and CONTINUOUS source: the same period, one tick longer
+   whenever the carried remainder adds up to a whole one, so that the
+   periods average out to tick_hz / frequency_hz exactly. FIXED_COUNT runs
+   dry once its target has been written. CONTINUOUS never does, and takes up
+   the frequency set_frequency() left here, where a period starts, so that
+   no period is ever part old and part new. Returns false once dry. */
 static bool next_period(pulse_generator_t *pg, uint32_t *length, uint32_t *high)
 {
     pulse_generator_dma_t *dma = &pg->dma;
 
-    if (dma->pulses_written >= dma->pulse_target) {
-        return false;
+    if (pg->mode == PULSE_GENERATOR_MODE_FIXED_COUNT) {
+        if (dma->pulses_written >= dma->pulse_target) {
+            return false;
+        }
+    } else {
+        /* Read once: set_frequency() may write it again at any moment. */
+        const uint32_t requested = dma->requested_frequency_hz;
+        if (requested != dma->period_divisor) {
+            set_dma_period(pg, requested);
+        }
     }
 
     uint32_t period = dma->period_ticks;
@@ -557,15 +572,17 @@ static uint32_t falls_finished(const pulse_generator_t *pg)
 }
 
 /* Nothing left to write: every pulse is in the buffer, the last period's
-   final entry included. */
+   final entry included. Never the case in CONTINUOUS. */
 static bool source_is_dry(const pulse_generator_t *pg)
 {
-    return pg->dma.pulses_written >= pg->dma.pulse_target &&
+    return pg->mode == PULSE_GENERATOR_MODE_FIXED_COUNT &&
+           pg->dma.pulses_written >= pg->dma.pulse_target &&
            pg->dma.split_index == pg->dma.split_count;
 }
 
-static pulse_generator_status_t start_dma_fixed_count(
+static pulse_generator_status_t start_dma_movement(
     pulse_generator_t *pg,
+    pulse_generator_mode_t mode,
     uint32_t frequency_hz,
     uint32_t pulse_count)
 {
@@ -574,11 +591,18 @@ static pulse_generator_status_t start_dma_fixed_count(
         return status;
     }
 
-    status = set_dma_period(pg, frequency_hz);
+    status = check_dma_frequency(pg, frequency_hz);
     if (status != PULSE_GENERATOR_OK) {
         return status;
     }
 
+    /* Set before the first fills, since the source reads both. */
+    set_dma_period(pg, frequency_hz);
+    pg->mode = mode;
+    pg->dma.requested_frequency_hz = frequency_hz;
+
+    /* The pulse count fields are FIXED_COUNT's; CONTINUOUS gets 0 and never
+       reads them. */
     pg->dma.pulses_written = 0;
     pg->dma.pulses_requested = pulse_count;
     pg->dma.pulse_target = pulse_count;
@@ -593,7 +617,6 @@ static pulse_generator_status_t start_dma_fixed_count(
 
     /* Published before the stream starts: its first half-transfer can come
        before stream_start() returns, and must find the instance RUNNING. */
-    pg->mode = PULSE_GENERATOR_MODE_FIXED_COUNT;
     pg->edge_count = 0;
     pg->state = PULSE_GENERATOR_STATE_RUNNING;
 
@@ -626,7 +649,7 @@ pulse_generator_status_t pulse_generator_start_fixed_count(
     }
 
     if (pg->dma_engine) {
-        return start_dma_fixed_count(pg, frequency_hz, pulse_count);
+        return start_dma_movement(pg, PULSE_GENERATOR_MODE_FIXED_COUNT, frequency_hz, pulse_count);
     }
 
     return start_timer_movement(pg, PULSE_GENERATOR_MODE_FIXED_COUNT,
@@ -641,12 +664,12 @@ pulse_generator_status_t pulse_generator_start_continuous(
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
-    if (pg->dma_engine) {
-        return PULSE_GENERATOR_ERROR_NOT_SUPPORTED; /* until the continuous source lands */
-    }
-
     if (pg->state != PULSE_GENERATOR_STATE_IDLE) {
         return PULSE_GENERATOR_ERROR_INVALID_STATE;
+    }
+
+    if (pg->dma_engine) {
+        return start_dma_movement(pg, PULSE_GENERATOR_MODE_CONTINUOUS, frequency_hz, 0);
     }
 
     /* No edge target: runs until stop(). */
@@ -659,12 +682,18 @@ pulse_generator_status_t pulse_generator_set_frequency(pulse_generator_t *pg, ui
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
-    if (pg->dma_engine) {
-        return PULSE_GENERATOR_ERROR_NOT_SUPPORTED; /* until the continuous source lands */
-    }
-
     if (pg->state != PULSE_GENERATOR_STATE_RUNNING || pg->mode != PULSE_GENERATOR_MODE_CONTINUOUS) {
         return PULSE_GENERATOR_ERROR_INVALID_STATE;
+    }
+
+    /* Only stored, a single word the refill reads once: no lock needed
+       against it, and no hardware touched. */
+    if (pg->dma_engine) {
+        pulse_generator_status_t status = check_dma_frequency(pg, frequency_hz);
+        if (status == PULSE_GENERATOR_OK) {
+            pg->dma.requested_frequency_hz = frequency_hz;
+        }
+        return status;
     }
 
     uint32_t half_period_ticks;
