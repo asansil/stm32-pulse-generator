@@ -16,6 +16,15 @@ target_link_libraries(test_init PRIVATE pulse_generator unity)
 
 add_test(NAME init COMMAND test_init)
 
+add_executable(test_engine
+    test_engine.c
+    mock_platform.c
+)
+
+target_link_libraries(test_engine PRIVATE pulse_generator unity)
+
+add_test(NAME engine COMMAND test_engine)
+
 add_executable(test_fixed_count
     test_fixed_count.c
     mock_platform.c
@@ -34,24 +43,6 @@ target_link_libraries(test_continuous PRIVATE pulse_generator unity)
 
 add_test(NAME continuous COMMAND test_continuous)
 
-add_executable(test_compare_scheduling
-    test_compare_scheduling.c
-    mock_platform.c
-)
-
-target_link_libraries(test_compare_scheduling PRIVATE pulse_generator unity)
-
-add_test(NAME compare_scheduling COMMAND test_compare_scheduling)
-
-add_executable(test_multi_instance
-    test_multi_instance.c
-    mock_platform.c
-)
-
-target_link_libraries(test_multi_instance PRIVATE pulse_generator unity)
-
-add_test(NAME multi_instance COMMAND test_multi_instance)
-
 add_executable(test_scheduled
     test_scheduled.c
     mock_platform.c
@@ -61,38 +52,11 @@ target_link_libraries(test_scheduled PRIVATE pulse_generator unity)
 
 add_test(NAME scheduled COMMAND test_scheduled)
 
-add_executable(test_dma_engine
-    test_dma_engine.c
+add_executable(test_multi_instance
+    test_multi_instance.c
     mock_platform.c
 )
 
-target_link_libraries(test_dma_engine PRIVATE pulse_generator unity)
+target_link_libraries(test_multi_instance PRIVATE pulse_generator unity)
 
-add_test(NAME dma_engine COMMAND test_dma_engine)
-
-add_executable(test_dma_fixed_count
-    test_dma_fixed_count.c
-    mock_platform.c
-)
-
-target_link_libraries(test_dma_fixed_count PRIVATE pulse_generator unity)
-
-add_test(NAME dma_fixed_count COMMAND test_dma_fixed_count)
-
-add_executable(test_dma_continuous
-    test_dma_continuous.c
-    mock_platform.c
-)
-
-target_link_libraries(test_dma_continuous PRIVATE pulse_generator unity)
-
-add_test(NAME dma_continuous COMMAND test_dma_continuous)
-
-add_executable(test_dma_scheduled
-    test_dma_scheduled.c
-    mock_platform.c
-)
-
-target_link_libraries(test_dma_scheduled PRIVATE pulse_generator unity)
-
-add_test(NAME dma_scheduled COMMAND test_dma_scheduled)
+add_test(NAME multi_instance COMMAND test_multi_instance)

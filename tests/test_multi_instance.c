@@ -1,13 +1,20 @@
+#include <string.h>
+
 #include "unity.h"
 #include "pulse_generator.h"
 #include "mock_platform.h"
 
 /* Several instances driven through one shared ops table, which is the whole
    point of keeping the function pointers out of the per-output state: one
-   const table in flash, one hw struct per axis. */
+   const table in flash, one hw struct and one DMA buffer per axis. */
+
+#define ENTRIES   8u
+#define MAX_WORDS 4u /* room for a four-word layout */
 
 static mock_hw_t hw_a;
 static mock_hw_t hw_b;
+static uint32_t  buffer_a[ENTRIES * MAX_WORDS];
+static uint32_t  buffer_b[ENTRIES * MAX_WORDS];
 
 static int s_complete_a;
 static int s_complete_b;
@@ -21,60 +28,91 @@ static void count_completions(pulse_generator_t *pg, pulse_generator_event_t eve
     }
 }
 
+/* 2 MHz tick, 8 entries, 1000 us window: no entry longer than 250 ticks. */
+static void init_one(pulse_generator_t *pg, mock_hw_t *hw, uint32_t *buffer, int *complete_count)
+{
+    pulse_generator_config_t config = {
+        .ops      = &g_mock_ops,
+        .hw       = hw,
+        .on_event = count_completions,
+        .user_ctx = complete_count,
+        .dma = {
+            .buffer       = buffer,
+            .buffer_words = ENTRIES * MAX_WORDS,
+            .entries      = ENTRIES,
+            .window_us    = 1000,
+        },
+    };
+    TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_init(pg, &config));
+}
+
 static void init_pair(pulse_generator_t *pg_a, pulse_generator_t *pg_b)
 {
-    pulse_generator_init(pg_a, &(pulse_generator_config_t){
-        .ops = &g_mock_ops, .hw = &hw_a, .on_event = count_completions, .user_ctx = &s_complete_a,
-    });
-    pulse_generator_init(pg_b, &(pulse_generator_config_t){
-        .ops = &g_mock_ops, .hw = &hw_b, .on_event = count_completions, .user_ctx = &s_complete_b,
-    });
+    init_one(pg_a, &hw_a, buffer_a, &s_complete_a);
+    init_one(pg_b, &hw_b, buffer_b, &s_complete_b);
+}
+
+/* Interleaved update events, as two timers would raise them. */
+static void step_both(pulse_generator_t *pg_a, pulse_generator_t *pg_b, size_t k)
+{
+    for (size_t i = 0; i < k; i++) {
+        mock_step(pg_a, &hw_a, 1);
+        mock_step(pg_b, &hw_b, 1);
+    }
 }
 
 void setUp(void)
 {
     mock_hw_init(&hw_a);
     mock_hw_init(&hw_b);
+    memset(buffer_a, 0, sizeof buffer_a);
+    memset(buffer_b, 0, sizeof buffer_b);
     s_complete_a = 0;
     s_complete_b = 0;
 }
 
 void tearDown(void) {}
 
-static void test_two_instances_arm_their_own_output(void)
+static void test_two_instances_start_their_own_stream(void)
 {
     pulse_generator_t pg_a;
     pulse_generator_t pg_b;
     init_pair(&pg_a, &pg_b);
 
-    pulse_generator_start_continuous(&pg_a, 1000);
+    TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_start_continuous(&pg_a, 1000));
 
-    TEST_ASSERT_TRUE(hw_a.channel_running);
-    TEST_ASSERT_FALSE(hw_b.channel_running);
-    TEST_ASSERT_EQUAL(1, hw_a.channel_start_call_count);
-    TEST_ASSERT_EQUAL(0, hw_b.channel_start_call_count);
+    TEST_ASSERT_TRUE(hw_a.running);
+    TEST_ASSERT_FALSE(hw_b.running);
+    TEST_ASSERT_EQUAL_PTR(buffer_a, hw_a.buffer);
+    TEST_ASSERT_EQUAL(1, hw_a.stream_start_call_count);
+    TEST_ASSERT_EQUAL(0, hw_b.stream_start_call_count);
 
-    pulse_generator_start_continuous(&pg_b, 1000);
+    TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_start_continuous(&pg_b, 1000));
 
-    TEST_ASSERT_TRUE(hw_b.channel_running);
-    TEST_ASSERT_EQUAL(1, hw_a.channel_start_call_count);
+    TEST_ASSERT_TRUE(hw_b.running);
+    TEST_ASSERT_EQUAL_PTR(buffer_b, hw_b.buffer);
+    TEST_ASSERT_EQUAL(1, hw_a.stream_start_call_count);
 }
 
-static void test_edges_on_one_instance_do_not_disturb_the_other(void)
+static void test_two_movements_play_to_their_end_without_interfering(void)
 {
     pulse_generator_t pg_a;
     pulse_generator_t pg_b;
     init_pair(&pg_a, &pg_b);
-    pulse_generator_start_continuous(&pg_a, 1000);
-    pulse_generator_start_continuous(&pg_b, 1000);
 
-    for (int i = 0; i < 10 * 2; i++) {
-        mock_hw_fire_and_notify(&pg_a, &hw_a);
-    }
+    TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_start_fixed_count(&pg_a, 10000, 5));
+    TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_start_fixed_count(&pg_b, 1000, 3));
 
-    TEST_ASSERT_EQUAL_UINT32(10, pulse_generator_get_pulse_count(&pg_a));
-    TEST_ASSERT_EQUAL_UINT32(0, pulse_generator_get_pulse_count(&pg_b));
-    TEST_ASSERT_EQUAL(0, hw_b.set_compare_call_count);
+    step_both(&pg_a, &pg_b, 100 * ENTRIES);
+
+    const uint32_t falls_b[] = { 1000, 3000, 5000 };
+    TEST_ASSERT_EQUAL(5, hw_a.rise_count);
+    TEST_ASSERT_EQUAL(3, hw_b.rise_count);
+    TEST_ASSERT_EQUAL_UINT32_ARRAY(falls_b, hw_b.fall_ticks, 3);
+    TEST_ASSERT_FALSE(hw_a.running);
+    TEST_ASSERT_FALSE(hw_b.running);
+    TEST_ASSERT_EQUAL(1, s_complete_a);
+    TEST_ASSERT_EQUAL(1, s_complete_b);
 }
 
 static void test_instances_can_run_at_different_frequencies_at_once(void)
@@ -83,17 +121,16 @@ static void test_instances_can_run_at_different_frequencies_at_once(void)
     pulse_generator_t pg_b;
     init_pair(&pg_a, &pg_b);
 
-    pulse_generator_start_continuous(&pg_a, 1000);
-    pulse_generator_start_continuous(&pg_b, 2000);
+    TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_start_continuous(&pg_a, 10000));
+    TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_start_continuous(&pg_b, 5000));
 
-    TEST_ASSERT_EQUAL_UINT32(1000, hw_a.first_compare);
-    TEST_ASSERT_EQUAL_UINT32(500, hw_b.first_compare);
+    step_both(&pg_a, &pg_b, 3 * ENTRIES);
 
-    mock_hw_fire_and_notify(&pg_a, &hw_a);
-    mock_hw_fire_and_notify(&pg_b, &hw_b);
-
-    TEST_ASSERT_EQUAL_UINT32(2000, hw_a.last_compare);
-    TEST_ASSERT_EQUAL_UINT32(1000, hw_b.last_compare);
+    /* 200 and 400 ticks at 2 MHz, one entry per period. */
+    const uint32_t rises_a[] = { 0, 200, 400, 600 };
+    const uint32_t rises_b[] = { 0, 400, 800, 1200 };
+    TEST_ASSERT_EQUAL_UINT32_ARRAY(rises_a, hw_a.rise_ticks, 4);
+    TEST_ASSERT_EQUAL_UINT32_ARRAY(rises_b, hw_b.rise_ticks, 4);
 }
 
 static void test_completing_one_movement_leaves_the_other_running(void)
@@ -101,20 +138,18 @@ static void test_completing_one_movement_leaves_the_other_running(void)
     pulse_generator_t pg_a;
     pulse_generator_t pg_b;
     init_pair(&pg_a, &pg_b);
-    pulse_generator_start_fixed_count(&pg_a, 1000, 2);
-    pulse_generator_start_continuous(&pg_b, 1000);
+    TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_start_fixed_count(&pg_a, 10000, 2));
+    TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_start_continuous(&pg_b, 10000));
 
-    for (int i = 0; i < 2 * 2; i++) {
-        mock_hw_fire_and_notify(&pg_a, &hw_a);
-    }
+    step_both(&pg_a, &pg_b, 10 * ENTRIES);
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_IDLE, pulse_generator_get_state(&pg_a));
     TEST_ASSERT_EQUAL(1, s_complete_a);
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_RUNNING, pulse_generator_get_state(&pg_b));
-    TEST_ASSERT_TRUE(hw_b.channel_running);
+    TEST_ASSERT_TRUE(hw_b.running);
     TEST_ASSERT_EQUAL(0, s_complete_b);
-    TEST_ASSERT_EQUAL(0, hw_b.channel_stop_call_count);
+    TEST_ASSERT_EQUAL(0, hw_b.stream_stop_call_count);
 }
 
 static void test_stopping_one_instance_does_not_touch_the_other_output(void)
@@ -122,15 +157,15 @@ static void test_stopping_one_instance_does_not_touch_the_other_output(void)
     pulse_generator_t pg_a;
     pulse_generator_t pg_b;
     init_pair(&pg_a, &pg_b);
-    pulse_generator_start_continuous(&pg_a, 1000);
-    pulse_generator_start_continuous(&pg_b, 1000);
+    TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_start_continuous(&pg_a, 1000));
+    TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_start_continuous(&pg_b, 1000));
 
-    pulse_generator_stop(&pg_a);
+    TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_stop(&pg_a));
 
-    TEST_ASSERT_FALSE(hw_a.channel_running);
-    TEST_ASSERT_EQUAL(1, hw_a.channel_stop_call_count);
-    TEST_ASSERT_TRUE(hw_b.channel_running);
-    TEST_ASSERT_EQUAL(0, hw_b.channel_stop_call_count);
+    TEST_ASSERT_FALSE(hw_a.running);
+    TEST_ASSERT_EQUAL(1, hw_a.stream_stop_call_count);
+    TEST_ASSERT_TRUE(hw_b.running);
+    TEST_ASSERT_EQUAL(0, hw_b.stream_stop_call_count);
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_RUNNING, pulse_generator_get_state(&pg_b));
 }
 
@@ -139,46 +174,56 @@ static void test_a_failed_start_on_one_instance_does_not_affect_the_other(void)
     pulse_generator_t pg_a;
     pulse_generator_t pg_b;
     init_pair(&pg_a, &pg_b);
-    hw_a.channel_start_result = PULSE_GENERATOR_ERROR;
+    hw_a.stream_start_result = PULSE_GENERATOR_ERROR;
 
-    TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR,
-                      pulse_generator_start_continuous(&pg_a, 1000));
-    TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK,
-                      pulse_generator_start_continuous(&pg_b, 1000));
+    TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR, pulse_generator_start_continuous(&pg_a, 10000));
+    TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_start_continuous(&pg_b, 10000));
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_IDLE, pulse_generator_get_state(&pg_a));
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_RUNNING, pulse_generator_get_state(&pg_b));
 
-    mock_hw_fire_and_notify(&pg_b, &hw_b);
-    TEST_ASSERT_EQUAL_UINT32(2000, hw_b.last_compare);
-    TEST_ASSERT_EQUAL(0, hw_a.set_compare_call_count);
+    step_both(&pg_a, &pg_b, 2 * ENTRIES);
+
+    TEST_ASSERT_EQUAL(0, hw_a.rise_count);
+    TEST_ASSERT_EQUAL(2 * ENTRIES, hw_b.rise_count);
 }
 
-static void test_instances_can_use_counters_of_different_widths(void)
+static void test_instances_can_use_different_entry_layouts(void)
 {
     pulse_generator_t pg_a;
     pulse_generator_t pg_b;
-    hw_b.counter_max = 0xFFFFFFFF;
-    hw_b.counter = 0xFFFFFF00;
+    /* Channel 2 on STM32: ARR, RCR, CCR1, CCR2. */
+    hw_b.layout = (pulse_generator_entry_layout_t){
+        .words_per_entry = 4,
+        .period_index    = 0,
+        .compare_index   = 3,
+    };
     init_pair(&pg_a, &pg_b);
 
-    pulse_generator_start_continuous(&pg_a, 1000);
-    pulse_generator_start_continuous(&pg_b, 1000);
+    TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_start_continuous(&pg_a, 1000));
+    TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_start_continuous(&pg_b, 1000));
 
-    /* Each instance wraps at its own counter's width, from the same ops. */
-    TEST_ASSERT_EQUAL_UINT32(1000, hw_a.first_compare);
-    TEST_ASSERT_EQUAL_UINT32(744, hw_b.first_compare);
+    /* Each instance encodes its buffer for its own output, from the same ops,
+       and both pins come out the same. */
+    TEST_ASSERT_EQUAL(ENTRIES * 3u, hw_a.words);
+    TEST_ASSERT_EQUAL(ENTRIES * 4u, hw_b.words);
+
+    step_both(&pg_a, &pg_b, 4 * ENTRIES);
+
+    TEST_ASSERT_EQUAL(hw_a.rise_count, hw_b.rise_count);
+    TEST_ASSERT_EQUAL_UINT32_ARRAY(hw_a.rise_ticks, hw_b.rise_ticks, hw_a.rise_count);
+    TEST_ASSERT_EQUAL_UINT32_ARRAY(hw_a.fall_ticks, hw_b.fall_ticks, hw_a.fall_count);
 }
 
 int main(void)
 {
     UNITY_BEGIN();
-    RUN_TEST(test_two_instances_arm_their_own_output);
-    RUN_TEST(test_edges_on_one_instance_do_not_disturb_the_other);
+    RUN_TEST(test_two_instances_start_their_own_stream);
+    RUN_TEST(test_two_movements_play_to_their_end_without_interfering);
     RUN_TEST(test_instances_can_run_at_different_frequencies_at_once);
     RUN_TEST(test_completing_one_movement_leaves_the_other_running);
     RUN_TEST(test_stopping_one_instance_does_not_touch_the_other_output);
     RUN_TEST(test_a_failed_start_on_one_instance_does_not_affect_the_other);
-    RUN_TEST(test_instances_can_use_counters_of_different_widths);
+    RUN_TEST(test_instances_can_use_different_entry_layouts);
     return UNITY_END();
 }

@@ -19,20 +19,14 @@ Three generation modes:
   instants, streamed through a queue so the sequence need never be held in
   memory in full.
 
-Two engines drive the pin. The platform selects one by the group of hooks
-it implements:
-
-- **DMA engine** — one timer per output in PWM mode with ARR/CCR preload,
-  fed one entry per update event by a circular DMA stream that the library
-  refills half at a time. No interrupt per edge, and the latency of every
-  change is bounded by a configurable window (plus, for a frequency change,
-  the rest of a period in progress longer than that). Runs all three modes.
-  Its CPU cost goes per buffer entry rather than per pulse, with a floor of
-  `entries / window` refilled entries per second even at low rates: a
-  longer window trades latency for CPU.
-- **Compare engine** — a free-running counter in output-compare toggle
-  mode, one compare interrupt per edge. Supports all three modes, and is
-  about to be removed now that they all run on the DMA engine.
+All three run on a single engine: one timer per output in PWM mode with
+ARR/CCR preload, fed one entry per update event by a circular DMA stream
+that the library refills half at a time. There is no interrupt per edge,
+and the latency of every change is bounded by a configurable window (plus,
+for a frequency change, the rest of a period in progress longer than that).
+The CPU cost goes per buffer entry rather than per pulse, with a floor of
+`entries / window` refilled entries per second even at low rates: a longer
+window trades latency for CPU.
 
 ## Repository layout
 
@@ -42,24 +36,27 @@ it implements:
 - `examples/` — reference firmware projects that exercise the library on
   real hardware, one per mode, for the STM32F407 Discovery
   (`stm32f407_discovery_fixed_count`, `stm32f407_discovery_continuous` and
-  `stm32f407_discovery_scheduled_dma` on the DMA engine,
-  `stm32f407_discovery_scheduled_isr` on the compare engine). Within each
-  example, `Core/` is STM32CubeMX-owned
-  (regenerated from the `.ioc`, hand edits only inside `USER CODE`
-  blocks) and `App/` holds the hand-written integration code (e.g. the
-  real `pulse_generator_ops_t`), organized in cohesive subfolders.
+  `stm32f407_discovery_scheduled_dma`). Within each example, `Core/` is
+  STM32CubeMX-owned (regenerated from the `.ioc`, hand edits only inside
+  `USER CODE` blocks) and `App/` holds the hand-written integration code
+  (e.g. the real `pulse_generator_ops_t`), organized in cohesive
+  subfolders.
 - `docs/` — reference material (frequency/resolution spreadsheet) and
   bench notes from hardware validation.
 
 ## Building and running the tests (host)
 
-Requires CMake 3.15+ and a C compiler (no cross toolchain needed for tests).
+No cross toolchain is needed for the tests. With CMake 3.21+, Ninja and
+`gcc`, use the `dev` preset, the same one CI runs:
 
 ```sh
-cmake -S . -B build -DPULSEGEN_BUILD_TESTS=ON
+cmake --preset dev
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
+
+Without the preset (CMake 3.15+ and any C compiler), configure with
+`cmake -S . -B build -DPULSEGEN_BUILD_TESTS=ON` instead.
 
 ## License
 
