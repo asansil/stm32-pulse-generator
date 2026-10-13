@@ -1016,10 +1016,12 @@ pulse_generator_status_t pulse_generator_notify_compare_match(pulse_generator_t 
  *        buffer, from the integrator's half-transfer ISR.
  * @param pg Instance owning the stream.
  * @return PULSE_GENERATOR_OK normally;
- *         PULSE_GENERATOR_ERROR_UNDERRUN if the interrupt was serviced so
- *         late that the stream was already reading the half to be refilled:
- *         nothing was written and the output has been stopped, mirroring
- *         PULSE_GENERATOR_EVENT_UNDERRUN;
+ *         PULSE_GENERATOR_ERROR_UNDERRUN if the movement has just stopped
+ *         as an underrun, mirroring PULSE_GENERATOR_EVENT_UNDERRUN: either
+ *         the interrupt was serviced so late that the stream was already
+ *         reading the half to be refilled (nothing was written), or a
+ *         SCHEDULED queue ran dry without pulse_generator_finish_scheduled()
+ *         and its last period has finished playing;
  *         PULSE_GENERATOR_ERROR_INVALID_PARAM on a null instance;
  *         otherwise whatever the platform returned.
  * @note Refills the half just transferred with the next entries of the
