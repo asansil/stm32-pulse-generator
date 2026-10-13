@@ -158,20 +158,7 @@ static void test_init_accepts_fixed_width_with_a_width(void)
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_init(&pg, &config));
 }
 
-/* --- modes the DMA engine does not offer yet --- */
-
-static void test_prepare_scheduled_is_not_supported(void)
-{
-    pulse_generator_t pg;
-    init_dma_instance(&pg);
-    uint32_t queue[4];
-
-    pulse_generator_status_t status = pulse_generator_prepare_scheduled(
-        &pg, &(pulse_generator_scheduled_config_t){ .queue = queue, .queue_capacity = 4 });
-
-    TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_NOT_SUPPORTED, status);
-    TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_IDLE, pulse_generator_get_state(&pg));
-}
+/* --- compare-engine entry points --- */
 
 static void test_get_now_ticks_reads_zero(void)
 {
@@ -1074,7 +1061,6 @@ int main(void)
     RUN_TEST(test_init_rejects_an_unknown_pulse_shape);
     RUN_TEST(test_init_rejects_fixed_width_without_a_width);
     RUN_TEST(test_init_accepts_fixed_width_with_a_width);
-    RUN_TEST(test_prepare_scheduled_is_not_supported);
     RUN_TEST(test_get_now_ticks_reads_zero);
     RUN_TEST(test_notify_compare_match_is_a_no_op);
     RUN_TEST(test_start_fixed_count_arms_the_stream_with_the_whole_buffer);

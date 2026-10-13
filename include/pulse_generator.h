@@ -70,7 +70,8 @@ typedef enum {
         emitted its last pulse (the instance is already IDLE when the callback
         runs), or a SCHEDULED one drained its queue after
         pulse_generator_finish_scheduled() (the instance is already back in
-        ARMED). */
+        ARMED). On the DMA engine it is reported from a refill interrupt, up
+        to one window after the last period has finished playing. */
     PULSE_GENERATOR_EVENT_COMPLETE,
     /** A compare match was serviced so late that the counter had already
         passed the next one, which was therefore rescheduled from the current
@@ -86,7 +87,8 @@ typedef enum {
         reports it once, and again only after a refill has brought it back
         to the watermark or above. Not reported once
         pulse_generator_finish_scheduled() has been called: the producer has
-        nothing more to add. */
+        nothing more to add. On the DMA engine the queue is checked once per
+        refill, right after that refill has taken its events. */
     PULSE_GENERATOR_EVENT_LOW_WATERMARK,
     /** A SCHEDULED movement stopped without being told to finish: the queue
         ran dry, an edge was serviced too late to land at its instant, or the
@@ -96,11 +98,15 @@ typedef enum {
         flushed. Also reported through the return value of
         pulse_generator_notify_compare_match(): PULSE_GENERATOR_ERROR_UNDERRUN,
         or the platform's own error in the last case.
-        On the DMA engine, also reported when a refill interrupt is serviced
-        too late to be used, in any mode: the output is stopped at once with
-        the pin low (a pulse in progress is cut short), FIXED_COUNT and
-        CONTINUOUS go back to IDLE, and the return value of the
-        pulse_generator_notify_dma_* call is
+        On the DMA engine, a dry queue is found by the refill that needed the
+        next event, up to one window ahead of the pin: the pulses already
+        written are played, the last one falling halfway through its own
+        interval, and the event comes up to one window after it ends.
+        Also reported when a refill interrupt is serviced too late to be
+        used, in any mode: the output is stopped at once with the pin low (a
+        pulse in progress is cut short), FIXED_COUNT and CONTINUOUS go back to
+        IDLE, SCHEDULED to ARMED with the queue flushed. In both cases the
+        return value of the pulse_generator_notify_dma_* call is
         PULSE_GENERATOR_ERROR_UNDERRUN. */
     PULSE_GENERATOR_EVENT_UNDERRUN,
 } pulse_generator_event_t;
@@ -429,11 +435,14 @@ typedef struct {
 
 /**
  * @brief What executes a SCHEDULED movement. The mode behaves the same with
- *        either; only the cost per pulse differs.
+ *        either; only the cost per pulse and the latency differ.
+ *
+ * Must name the engine the instance's ops table selects (see
+ * pulse_generator_ops_t): it is checked, not chosen, here.
  */
 typedef enum {
-    PULSE_GENERATOR_ENGINE_ISR, /* one compare interrupt per edge; low and medium rates */
-    PULSE_GENERATOR_ENGINE_DMA, /* internal double buffer fed by DMA; not available yet */
+    PULSE_GENERATOR_ENGINE_ISR, /* compare group: one compare interrupt per edge */
+    PULSE_GENERATOR_ENGINE_DMA, /* DMA group: periods fed from the circular DMA buffer */
 } pulse_generator_engine_t;
 
 /**
@@ -467,10 +476,12 @@ typedef struct {
         output low (see PULSE_GENERATOR_EVENT_UNDERRUN). At 0 that margin is
         a single tick, which on real hardware has usually gone by before the
         compare register is written, leaving the channel silent until the
-        counter wraps round: set it to the measured ISR cost. */
+        counter wraps round: set it to the measured ISR cost.
+        Compare engine only: ignored on the DMA engine, where
+        pulse_generator_dma_config_t::min_entry_ns plays this part. */
     uint32_t min_interval_ticks;
 
-    /** Engine executing the movement. */
+    /** Engine executing the movement: the one the instance runs on. */
     pulse_generator_engine_t engine;
 } pulse_generator_scheduled_config_t;
 
@@ -494,8 +505,9 @@ typedef struct {
     pulse_generator_engine_t engine;
 
     /* Single-producer / single-consumer ring buffer: head is written only by
-       queue_events(), tail only by the compare ISR, and each side writes its
-       slot before publishing its index, which is what makes it lock-free. */
+       queue_events(), tail only by the engine (the compare ISR or the DMA
+       refill), and each side writes its slot before publishing its index,
+       which is what makes it lock-free. */
     volatile size_t   queue_head;
     volatile size_t   queue_tail;
     volatile bool     finish_requested; /* set by finish_scheduled(), read by the ISR */
@@ -510,6 +522,13 @@ typedef struct {
     bool                    stop_after_fall;     /* the next fall is the last edge of the movement */
     pulse_generator_event_t stop_event;          /* what to report then: COMPLETE or UNDERRUN */
     bool                    low_watermark_armed; /* edge-triggers EVENT_LOW_WATERMARK */
+
+    /* DMA engine source, written only by the refill (and by start_scheduled()
+       before the stream starts). It also uses interval_current, the interval
+       of the last pulse written, and stop_event, how the movement ends once
+       the source is dry. */
+    bool lead_in;    /* the next period is the one before the first rise */
+    bool source_dry; /* the last period has been written: no more from the queue */
 } pulse_generator_sched_t;
 
 /**
@@ -720,14 +739,18 @@ pulse_generator_status_t pulse_generator_start_continuous(
  * @return PULSE_GENERATOR_OK if the instance is now ARMED with an empty queue;
  *         PULSE_GENERATOR_ERROR_INVALID_PARAM on a null instance, config or
  *         queue, a capacity below 2, a low watermark not below the capacity,
- *         an unknown engine, or a platform reporting a counter maximum that
- *         is not of the form 2^n - 1;
+ *         an unknown engine, PULSE_GENERATOR_ENGINE_ISR on an instance running
+ *         on the DMA engine, or a platform reporting a counter maximum that
+ *         is not of the form 2^n - 1; on the DMA engine, also the buffer,
+ *         layout and window errors of pulse_generator_start_fixed_count();
  *         PULSE_GENERATOR_ERROR_INVALID_STATE if the instance is not IDLE;
- *         PULSE_GENERATOR_ERROR_NOT_SUPPORTED for PULSE_GENERATOR_ENGINE_DMA,
- *         which is not available yet, or on an instance running on the DMA
- *         engine, which does not offer this mode yet.
- * @note Reads the platform's tick rate and counter maximum here rather than
- *       at start, so that pulse_generator_queue_events() can validate
+ *         PULSE_GENERATOR_ERROR_NOT_SUPPORTED for PULSE_GENERATOR_ENGINE_DMA
+ *         on an instance running on the compare engine;
+ *         otherwise whatever the platform returned when asked for its entry
+ *         layout.
+ * @note Reads the platform's timing here rather than at start (tick rate and
+ *       counter maximum; on the DMA engine, tick rate, period maximum and
+ *       entry layout), so that pulse_generator_queue_events() can validate
  *       intervals against them. Not for interrupt context.
  * @note The instance stays ARMED from one movement to the next; only
  *       pulse_generator_init() takes it back to IDLE.
@@ -741,8 +764,9 @@ pulse_generator_status_t pulse_generator_prepare_scheduled(
  * @param pg        Instance, ARMED or RUNNING.
  * @param intervals Events to append, each one pulse given as the interval in
  *                  ticks from the previous pulse's rise to its own (the
- *                  first pulse of a movement is measured from its start
- *                  tick). Copied into the queue.
+ *                  first pulse of a movement is measured from its start,
+ *                  see pulse_generator_start_scheduled()). Copied into the
+ *                  queue.
  * @param n         Number of elements in intervals.
  * @return How many events were accepted, taken from the front of intervals.
  *         Fewer than n means that either the queue filled up or
@@ -750,11 +774,15 @@ pulse_generator_status_t pulse_generator_prepare_scheduled(
  *         taken; pulse_generator_get_free_space() tells the two apart.
  *         0 on a null argument or if the instance is not prepared for
  *         SCHEDULED mode.
- * @note An interval is rejected if it is below 2 ticks, if its halves would
- *       be shorter than the configured min_interval_ticks, or if it exceeds
- *       the counter's maximum. Staying well below that maximum is
- *       recommended: the headroom is what lets a late edge be told from one
- *       still to come.
+ * @note Compare engine: an interval is rejected if it is below 2 ticks, if
+ *       its halves would be shorter than the configured min_interval_ticks,
+ *       or if it exceeds the counter's maximum. Staying well below that
+ *       maximum is recommended: the headroom is what lets a late edge be
+ *       told from one still to come.
+ * @note DMA engine: an interval is rejected if it is shorter than the
+ *       minimum entry or, with PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH, not
+ *       longer than the pulse width. There is no upper limit: long intervals
+ *       are split into several entries.
  * @note Compute intervals from rounded absolute instants rather than by
  *       rounding each one on its own, or the rounding errors add up along
  *       the sequence. The library executes the integers it is given as-is.
@@ -764,7 +792,7 @@ pulse_generator_status_t pulse_generator_prepare_scheduled(
  *       pulse_generator_event_cb_t.
  * @note Stop queueing once the movement ends (PULSE_GENERATOR_EVENT_COMPLETE,
  *       PULSE_GENERATOR_EVENT_UNDERRUN, or after pulse_generator_stop()),
- *       and recompute from the next start tick. An event queued while the
+ *       and recompute from the next start. An event queued while the
  *       library is flushing the queue can outlive the flush, and would then
  *       open the next movement.
  */
@@ -781,19 +809,29 @@ size_t pulse_generator_queue_events(
  *                   margin. Being absolute rather than a delay, the same
  *                   value given to several channels of one timer starts them
  *                   in step. Not itself an edge: the first rise lands at
- *                   start_tick plus the first interval.
+ *                   start_tick plus the first interval. Compare engine only:
+ *                   ignored on the DMA engine, where the movement starts when
+ *                   this is called.
  * @return PULSE_GENERATOR_OK if the instance is now RUNNING;
  *         PULSE_GENERATOR_ERROR_INVALID_STATE if the instance is not ARMED,
  *         or if fewer than two events are queued (one is enough after
  *         pulse_generator_finish_scheduled()), since a pulse needs the next
  *         one's interval to place its fall;
- *         PULSE_GENERATOR_ERROR_INVALID_PARAM on a null instance, or if the
- *         first rise is no longer ahead of the counter;
+ *         PULSE_GENERATOR_ERROR_INVALID_PARAM on a null instance, or, on the
+ *         compare engine, if the first rise is no longer ahead of the counter;
  *         otherwise whatever the platform returned while being armed.
  *         On any failure the instance stays ARMED with its queue untouched.
  * @note Returns as soon as the hardware is armed. The movement ends with
  *       PULSE_GENERATOR_EVENT_COMPLETE or PULSE_GENERATOR_EVENT_UNDERRUN,
  *       back in ARMED, ready for the next start.
+ * @note DMA engine: the first rise comes the first interval after the
+ *       start, plus one priming period without a pulse (see
+ *       pulse_generator_ops_t::stream_start). The whole buffer is filled
+ *       from the queue before the stream starts, and from then on each
+ *       refill takes events up to one window ahead of the pin. When
+ *       streaming, queue at least a window's worth of events before
+ *       starting and keep the queue that far ahead: a queue found empty
+ *       without a finish request ends the movement as an underrun.
  */
 pulse_generator_status_t pulse_generator_start_scheduled(
     pulse_generator_t *pg,
@@ -812,7 +850,8 @@ pulse_generator_status_t pulse_generator_start_scheduled(
  *       then start, and that sequence is played once.
  * @note Must be called before the queue runs dry. Once the engine has found
  *       the queue empty it is too late, and the movement ends as an
- *       underrun.
+ *       underrun. On the DMA engine that happens at the refill that needs
+ *       the next event, up to one window before the pin would reach it.
  * @note Cleared whenever a movement ends: each movement needs its own.
  */
 pulse_generator_status_t pulse_generator_finish_scheduled(pulse_generator_t *pg);
@@ -977,10 +1016,12 @@ pulse_generator_status_t pulse_generator_notify_compare_match(pulse_generator_t 
  *        buffer, from the integrator's half-transfer ISR.
  * @param pg Instance owning the stream.
  * @return PULSE_GENERATOR_OK normally;
- *         PULSE_GENERATOR_ERROR_UNDERRUN if the interrupt was serviced so
- *         late that the stream was already reading the half to be refilled:
- *         nothing was written and the output has been stopped, mirroring
- *         PULSE_GENERATOR_EVENT_UNDERRUN;
+ *         PULSE_GENERATOR_ERROR_UNDERRUN if the movement has just stopped
+ *         as an underrun, mirroring PULSE_GENERATOR_EVENT_UNDERRUN: either
+ *         the interrupt was serviced so late that the stream was already
+ *         reading the half to be refilled (nothing was written), or a
+ *         SCHEDULED queue ran dry without pulse_generator_finish_scheduled()
+ *         and its last period has finished playing;
  *         PULSE_GENERATOR_ERROR_INVALID_PARAM on a null instance;
  *         otherwise whatever the platform returned.
  * @note Refills the half just transferred with the next entries of the
