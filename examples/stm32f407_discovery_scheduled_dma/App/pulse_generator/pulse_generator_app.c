@@ -75,8 +75,8 @@ typedef enum {
 } demo_state_t;
 
 /* CPU cost of one movement, with the DWT cycle counter. The refill is timed
-   around notify_dma_*() alone, the span the ISR example timed around
-   notify_compare_match(), so cycles_per_pulse compares the two engines. */
+   around notify_dma_*() alone, so cycles_per_pulse is the library's share of
+   the interrupt, without the HAL dispatch around it. */
 typedef struct {
     uint32_t pulses;              /* pulses the phase emits */
     uint32_t refills;             /* HT/TC interrupts serviced */
@@ -169,8 +169,7 @@ static uint32_t us_to_ticks(uint32_t us)
 
 /* Clears the refill counters, raises the phase marker (PD13) and starts
    whatever has been queued, timing the start: it fills the whole buffer
-   from the queue before the stream starts. On the DMA engine the start
-   tick is ignored, and the movement starts here.
+   from the queue before the stream starts, and the movement starts here.
    @param pulses Pulses the movement emits, for the cost per pulse. */
 static bool start_movement(uint32_t pulses)
 {
@@ -182,7 +181,7 @@ static bool start_movement(uint32_t pulses)
     HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, GPIO_PIN_SET);
 
     movement_start_cycles = DWT->CYCCNT;
-    pulse_generator_status_t status = pulse_generator_start_scheduled(&pg, 0U);
+    pulse_generator_status_t status = pulse_generator_start_scheduled(&pg);
     phase_stats[demo_phase].start_cycles = DWT->CYCCNT - movement_start_cycles;
 
     if (status != PULSE_GENERATOR_OK) {
@@ -424,13 +423,10 @@ void pulse_generator_app_init(void)
         return;
     }
 
-    /* min_interval_ticks is left at 0: the DMA engine ignores it, and
-       min_entry_ns plays its part. */
     prepare_status = pulse_generator_prepare_scheduled(&pg, &(pulse_generator_scheduled_config_t){
         .queue = queue,
         .queue_capacity = QUEUE_CAPACITY,
         .low_watermark = LOW_WATERMARK,
-        .engine = PULSE_GENERATOR_ENGINE_DMA,
     });
     if (prepare_status != PULSE_GENERATOR_OK) {
         return;
