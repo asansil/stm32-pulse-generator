@@ -60,3 +60,11 @@ add_executable(test_multi_instance
 target_link_libraries(test_multi_instance PRIVATE pulse_generator unity)
 
 add_test(NAME multi_instance COMMAND test_multi_instance)
+
+add_executable(test_util
+    test_util.c
+)
+
+target_link_libraries(test_util PRIVATE pulse_generator unity)
+
+add_test(NAME util COMMAND test_util)

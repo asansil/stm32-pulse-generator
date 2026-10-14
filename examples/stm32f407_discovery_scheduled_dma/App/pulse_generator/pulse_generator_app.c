@@ -1,6 +1,7 @@
 #include "pulse_generator_app.h"
 
 #include "pulse_generator_platform.h"
+#include "pulse_generator_util.h"
 #include "ramp_profile.h"
 
 extern TIM_HandleTypeDef htim4;
@@ -162,11 +163,6 @@ static void abort_movement(void)
     HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, GPIO_PIN_RESET);
 }
 
-static uint32_t us_to_ticks(uint32_t us)
-{
-    return (uint32_t)((uint64_t)us * pg_hw.tick_hz / 1000000U);
-}
-
 /* Clears the refill counters, raises the phase marker (PD13) and starts
    whatever has been queued, timing the start: it fills the whole buffer
    from the queue before the stream starts, and the movement starts here.
@@ -199,7 +195,10 @@ static bool start_known_sequence(void)
     uint32_t intervals[ARRAY_LEN(known_sequence_us)];
 
     for (size_t n = 0; n < ARRAY_LEN(intervals); n++) {
-        intervals[n] = us_to_ticks(known_sequence_us[n]);
+        if (!pulse_generator_us_to_ticks(pg_hw.tick_hz, known_sequence_us[n], &intervals[n])) {
+            rejected_interval_count++;
+            return false;
+        }
     }
 
     if (pulse_generator_queue_events(&pg, intervals, ARRAY_LEN(intervals))
@@ -292,7 +291,14 @@ static bool feed_latency(void)
     while (latency_fed < LATENCY_TOTAL_PULSES &&
            pulse_generator_get_pending_events(&pg) < LATENCY_LEAD_EVENTS) {
         bool marked = (latency_fed % LATENCY_MARKER_EVERY) == LATENCY_MARKER_EVERY - 1U;
-        uint32_t interval = us_to_ticks(marked ? LATENCY_MARKER_US : LATENCY_INTERVAL_US);
+        uint32_t interval;
+
+        if (!pulse_generator_us_to_ticks(pg_hw.tick_hz,
+                                         marked ? LATENCY_MARKER_US : LATENCY_INTERVAL_US,
+                                         &interval)) {
+            rejected_interval_count++;
+            return false;
+        }
 
         if (marked) {
             HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);

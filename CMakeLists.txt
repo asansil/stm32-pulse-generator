@@ -6,6 +6,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 add_library(pulse_generator
     src/pulse_generator.c
+    src/pulse_generator_util.c
 )
 
 target_include_directories(pulse_generator PUBLIC

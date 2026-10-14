@@ -28,6 +28,22 @@ The CPU cost goes per buffer entry rather than per pulse, with a floor of
 `entries / window` refilled entries per second even at low rates: a longer
 window trades latency for CPU.
 
+## Optional utilities
+
+`include/pulse_generator_util.h` collects helpers for building the
+intervals a scheduled queue takes. They are plain tick arithmetic: the core
+does not depend on them, and they take the tick rate as a parameter instead
+of an instance.
+
+- **Unit conversions** — µs, ns and Hz to ticks and back, rounded to the
+  nearest tick, reporting a result that does not fit instead of wrapping.
+- **Spread** — an iterator that turns "n pulses over T ticks" into n
+  intervals that add up to exactly T and differ by at most one tick, so
+  chained segments never drift.
+- **Timeline** — turns absolute pulse instants, in ns, into intervals,
+  rounding each instant rather than each interval, so rounding errors never
+  accumulate.
+
 ## Repository layout
 
 - `include/` — public API of the library.
