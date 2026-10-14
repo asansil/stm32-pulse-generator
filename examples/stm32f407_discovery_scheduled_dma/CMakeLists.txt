@@ -46,6 +46,7 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     ${CMAKE_CURRENT_SOURCE_DIR}/../../src/pulse_generator.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../src/pulse_generator_util.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/pulse_generator/pulse_generator_platform.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/pulse_generator/pulse_generator_app.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/pulse_generator/ramp_profile.c
