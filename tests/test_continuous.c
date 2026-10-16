@@ -28,13 +28,15 @@ static void init_with_shape(pulse_generator_t *pg, pulse_generator_pulse_shape_t
         .ops      = &g_mock_ops,
         .hw       = &hw,
         .on_event = record_event,
+        .pulse = {
+            .shape    = shape,
+            .width_ns = width_ns,
+        },
         .dma = {
             .buffer       = buffer,
             .buffer_words = ENTRIES * WORDS_PER_ENTRY,
             .entries      = ENTRIES,
             .window_us    = 1000,
-            .pulse_shape  = shape,
-            .width_ns     = width_ns,
         },
     };
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_init(pg, &config));

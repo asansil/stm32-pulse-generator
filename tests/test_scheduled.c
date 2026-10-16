@@ -269,8 +269,8 @@ static void test_a_fixed_width_interval_not_longer_than_the_width_is_rejected(vo
 {
     /* 50 us = 100 ticks high. */
     pulse_generator_config_t config = dma_config(1000);
-    config.dma.pulse_shape = PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH;
-    config.dma.width_ns = 50000;
+    config.pulse.shape = PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH;
+    config.pulse.width_ns = 50000;
     init_with(&config);
     prepare_default();
 
@@ -413,8 +413,8 @@ static void test_fixed_width_pulses_keep_their_width_whatever_the_interval(void)
 {
     /* 10 us = 20 ticks high. */
     pulse_generator_config_t config = dma_config(8000);
-    config.dma.pulse_shape = PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH;
-    config.dma.width_ns = 10000;
+    config.pulse.shape = PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH;
+    config.pulse.width_ns = 10000;
     init_with(&config);
     prepare_default();
     start_worked_example(true);

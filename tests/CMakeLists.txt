@@ -61,6 +61,15 @@ target_link_libraries(test_multi_instance PRIVATE pulse_generator unity)
 
 add_test(NAME multi_instance COMMAND test_multi_instance)
 
+add_executable(test_pulse_shape
+    test_pulse_shape.c
+    mock_platform.c
+)
+
+target_link_libraries(test_pulse_shape PRIVATE pulse_generator unity)
+
+add_test(NAME pulse_shape COMMAND test_pulse_shape)
+
 add_executable(test_util
     test_util.c
 )

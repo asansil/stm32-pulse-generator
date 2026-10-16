@@ -150,8 +150,8 @@ static void test_layout_reported_by_the_platform_is_honoured(void)
 static void test_fixed_width_sets_the_high_time_of_every_pulse(void)
 {
     pulse_generator_config_t config = dma_config();
-    config.dma.pulse_shape = PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH;
-    config.dma.width_ns = 5000; /* 10 ticks at 2 MHz */
+    config.pulse.shape = PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH;
+    config.pulse.width_ns = 5000; /* 10 ticks at 2 MHz */
     pulse_generator_t pg;
     init_with(&pg, &config);
 
@@ -167,8 +167,8 @@ static void test_fixed_width_sets_the_high_time_of_every_pulse(void)
 static void test_fixed_width_is_rounded_up_to_whole_ticks(void)
 {
     pulse_generator_config_t config = dma_config();
-    config.dma.pulse_shape = PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH;
-    config.dma.width_ns = 5100; /* 10.2 ticks */
+    config.pulse.shape = PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH;
+    config.pulse.width_ns = 5100; /* 10.2 ticks */
     pulse_generator_t pg;
     init_with(&pg, &config);
 
@@ -304,8 +304,8 @@ static void test_start_rejects_a_zero_frequency(void)
 static void test_fixed_width_rejects_a_period_not_longer_than_the_width(void)
 {
     pulse_generator_config_t config = dma_config();
-    config.dma.pulse_shape = PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH;
-    config.dma.width_ns = 50000; /* 100 ticks */
+    config.pulse.shape = PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH;
+    config.pulse.width_ns = 50000; /* 100 ticks */
     pulse_generator_t pg;
     init_with(&pg, &config);
 
@@ -429,8 +429,8 @@ static void test_entries_fit_the_timer_registers(void)
 static void test_a_fixed_width_spans_entries(void)
 {
     pulse_generator_config_t config = dma_config();
-    config.dma.pulse_shape = PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH;
-    config.dma.width_ns = 150000; /* 300 ticks: over one 250-tick entry */
+    config.pulse.shape = PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH;
+    config.pulse.width_ns = 150000; /* 300 ticks: over one 250-tick entry */
     pulse_generator_t pg;
     init_with(&pg, &config);
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_start_fixed_count(&pg, 1000, 100));
@@ -818,8 +818,8 @@ static void test_pulse_count_follows_an_uneven_split(void)
 static void test_pulse_count_follows_a_fixed_width_spanning_entries(void)
 {
     pulse_generator_config_t config = dma_config();
-    config.dma.pulse_shape = PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH;
-    config.dma.width_ns = 125000; /* 250 ticks: the fall lands right at an entry's end */
+    config.pulse.shape = PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH;
+    config.pulse.width_ns = 125000; /* 250 ticks: the fall lands right at an entry's end */
     pulse_generator_t pg;
     init_with(&pg, &config);
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_start_fixed_count(&pg, 1000, 1000));

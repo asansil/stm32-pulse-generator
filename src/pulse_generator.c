@@ -12,22 +12,24 @@ static bool ops_are_complete(const pulse_generator_ops_t *ops)
            ops->get_entry_layout != NULL;
 }
 
+/* Shared by init() and set_pulse_shape(). */
+static bool pulse_shape_is_valid(pulse_generator_pulse_shape_t shape, uint32_t width_ns)
+{
+    switch (shape) {
+    case PULSE_GENERATOR_PULSE_SHAPE_HALF_PERIOD:
+        return true;
+    case PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH:
+        return width_ns != 0;
+    default:
+        return false;
+    }
+}
+
 /* Only what can be checked without the platform: the layout, and so whether
    the buffer is large enough, is known once a movement starts. */
 static bool dma_config_is_valid(const pulse_generator_dma_config_t *dma)
 {
-    if (dma->buffer == NULL || dma->entries < 4 || dma->entries % 2 != 0 || dma->window_us == 0) {
-        return false;
-    }
-
-    switch (dma->pulse_shape) {
-    case PULSE_GENERATOR_PULSE_SHAPE_HALF_PERIOD:
-        return true;
-    case PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH:
-        return dma->width_ns != 0;
-    default:
-        return false;
-    }
+    return dma->buffer != NULL && dma->entries >= 4 && dma->entries % 2 == 0 && dma->window_us != 0;
 }
 
 pulse_generator_status_t pulse_generator_init(
@@ -38,7 +40,9 @@ pulse_generator_status_t pulse_generator_init(
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
-    if (!ops_are_complete(config->ops) || !dma_config_is_valid(&config->dma)) {
+    if (!ops_are_complete(config->ops) ||
+        !pulse_shape_is_valid(config->pulse.shape, config->pulse.width_ns) ||
+        !dma_config_is_valid(&config->dma)) {
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
@@ -47,16 +51,43 @@ pulse_generator_status_t pulse_generator_init(
         .hw       = config->hw,
         .on_event = config->on_event,
         .user_ctx = config->user_ctx,
+        .pulse = {
+            .shape    = config->pulse.shape,
+            .width_ns = config->pulse.width_ns,
+        },
         .dma = {
             .buffer       = config->dma.buffer,
             .buffer_words = config->dma.buffer_words,
             .entries      = config->dma.entries,
             .window_us    = config->dma.window_us,
-            .pulse_shape  = config->dma.pulse_shape,
-            .width_ns     = config->dma.width_ns,
             .min_entry_ns = config->dma.min_entry_ns,
         },
     };
+
+    return PULSE_GENERATOR_OK;
+}
+
+/* Only stored: the width is converted to ticks, and checked against the
+   periods, when the next movement starts, as the config's is. */
+pulse_generator_status_t pulse_generator_set_pulse_shape(
+    pulse_generator_t *pg,
+    pulse_generator_pulse_shape_t shape,
+    uint32_t width_ns)
+{
+    if (pg == NULL) {
+        return PULSE_GENERATOR_ERROR_INVALID_PARAM;
+    }
+
+    if (pg->state != PULSE_GENERATOR_STATE_IDLE) {
+        return PULSE_GENERATOR_ERROR_INVALID_STATE;
+    }
+
+    if (!pulse_shape_is_valid(shape, width_ns)) {
+        return PULSE_GENERATOR_ERROR_INVALID_PARAM;
+    }
+
+    pg->pulse.shape = shape;
+    pg->pulse.width_ns = width_ns;
 
     return PULSE_GENERATOR_OK;
 }
@@ -192,12 +223,12 @@ static pulse_generator_status_t capture_dma_timing(pulse_generator_t *pg)
     }
 
     pg->tick_hz = tick_hz;
+    pg->pulse.width_ticks = (pg->pulse.shape == PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH)
+                                ? ns_to_ticks_rounded_up(pg->pulse.width_ns, tick_hz)
+                                : 0;
     dma->layout = layout;
     dma->segment_max_ticks = (uint32_t)segment_max;
     dma->min_entry_ticks = min_entry;
-    dma->width_ticks = (dma->pulse_shape == PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH)
-                           ? ns_to_ticks_rounded_up(dma->width_ns, tick_hz)
-                           : 0;
 
     return PULSE_GENERATOR_OK;
 }
@@ -211,7 +242,7 @@ static bool dma_period_is_playable(const pulse_generator_t *pg, uint32_t ticks)
         return false;
     }
 
-    return pg->dma.pulse_shape != PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH || ticks > pg->dma.width_ticks;
+    return pg->pulse.shape != PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH || ticks > pg->pulse.width_ticks;
 }
 
 /* Checks a frequency against what the source can play, on the whole part
@@ -238,8 +269,8 @@ static void set_dma_period(pulse_generator_t *pg, uint32_t frequency_hz)
 
 static uint32_t pulse_high_ticks(const pulse_generator_t *pg, uint32_t period_ticks)
 {
-    return (pg->dma.pulse_shape == PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH) ? pg->dma.width_ticks
-                                                                             : period_ticks / 2u;
+    return (pg->pulse.shape == PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH) ? pg->pulse.width_ticks
+                                                                         : period_ticks / 2u;
 }
 
 /* The SCHEDULED source. The period that starts at the rise of pulse k lasts

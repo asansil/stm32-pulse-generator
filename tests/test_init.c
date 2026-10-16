@@ -172,7 +172,7 @@ static void test_init_rejects_an_unknown_pulse_shape(void)
 {
     pulse_generator_t pg;
     pulse_generator_config_t config = valid_config();
-    config.dma.pulse_shape = (pulse_generator_pulse_shape_t)2;
+    config.pulse.shape = (pulse_generator_pulse_shape_t)2;
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, pulse_generator_init(&pg, &config));
 }
@@ -181,7 +181,7 @@ static void test_init_rejects_fixed_width_without_a_width(void)
 {
     pulse_generator_t pg;
     pulse_generator_config_t config = valid_config();
-    config.dma.pulse_shape = PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH;
+    config.pulse.shape = PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH;
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, pulse_generator_init(&pg, &config));
 }
@@ -190,8 +190,8 @@ static void test_init_accepts_fixed_width_with_a_width(void)
 {
     pulse_generator_t pg;
     pulse_generator_config_t config = valid_config();
-    config.dma.pulse_shape = PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH;
-    config.dma.width_ns = 5000;
+    config.pulse.shape = PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH;
+    config.pulse.width_ns = 5000;
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_init(&pg, &config));
 }

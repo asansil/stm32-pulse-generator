@@ -416,12 +416,14 @@ void pulse_generator_app_init(void)
         .ops = &g_stm32f4_pg_ops,
         .hw = &pg_hw,
         .on_event = on_pulse_generator_event,
+        .pulse = {
+            .shape = PULSE_GENERATOR_PULSE_SHAPE_HALF_PERIOD,
+        },
         .dma = {
             .buffer = pg_dma_buffer,
             .buffer_words = ARRAY_LEN(pg_dma_buffer),
             .entries = PG_DMA_ENTRIES,
             .window_us = PG_DMA_WINDOW_US,
-            .pulse_shape = PULSE_GENERATOR_PULSE_SHAPE_HALF_PERIOD,
             .min_entry_ns = PG_MIN_ENTRY_NS,
         },
     });
