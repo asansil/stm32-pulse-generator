@@ -72,7 +72,7 @@ ctest --test-dir build --output-on-failure
 ```
 
 Without the preset (CMake 3.15+ and any C compiler), configure with
-`cmake -S . -B build -DPULSEGEN_BUILD_TESTS=ON` instead.
+`cmake -S . -B build -DPULSE_GENERATOR_BUILD_TESTS=ON` instead.
 
 ## License
 

@@ -13,9 +13,9 @@ target_include_directories(pulse_generator PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-option(PULSEGEN_BUILD_TESTS "Build host unit tests for pulse_generator" OFF)
+option(PULSE_GENERATOR_BUILD_TESTS "Build host unit tests for pulse_generator" OFF)
 
-if(PULSEGEN_BUILD_TESTS)
+if(PULSE_GENERATOR_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
