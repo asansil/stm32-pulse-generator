@@ -16,8 +16,8 @@ static mock_hw_t hw_b;
 static uint32_t  buffer_a[ENTRIES * MAX_WORDS];
 static uint32_t  buffer_b[ENTRIES * MAX_WORDS];
 
-static int s_complete_a;
-static int s_complete_b;
+static int complete_a;
+static int complete_b;
 
 static void count_completions(pulse_generator_t *pg, pulse_generator_event_t event, void *user_ctx)
 {
@@ -48,8 +48,8 @@ static void init_one(pulse_generator_t *pg, mock_hw_t *hw, uint32_t *buffer, int
 
 static void init_pair(pulse_generator_t *pg_a, pulse_generator_t *pg_b)
 {
-    init_one(pg_a, &hw_a, buffer_a, &s_complete_a);
-    init_one(pg_b, &hw_b, buffer_b, &s_complete_b);
+    init_one(pg_a, &hw_a, buffer_a, &complete_a);
+    init_one(pg_b, &hw_b, buffer_b, &complete_b);
 }
 
 /* Interleaved update events, as two timers would raise them. */
@@ -67,8 +67,8 @@ void setUp(void)
     mock_hw_init(&hw_b);
     memset(buffer_a, 0, sizeof buffer_a);
     memset(buffer_b, 0, sizeof buffer_b);
-    s_complete_a = 0;
-    s_complete_b = 0;
+    complete_a = 0;
+    complete_b = 0;
 }
 
 void tearDown(void) {}
@@ -111,8 +111,8 @@ static void test_two_movements_play_to_their_end_without_interfering(void)
     TEST_ASSERT_EQUAL_UINT32_ARRAY(falls_b, hw_b.fall_ticks, 3);
     TEST_ASSERT_FALSE(hw_a.running);
     TEST_ASSERT_FALSE(hw_b.running);
-    TEST_ASSERT_EQUAL(1, s_complete_a);
-    TEST_ASSERT_EQUAL(1, s_complete_b);
+    TEST_ASSERT_EQUAL(1, complete_a);
+    TEST_ASSERT_EQUAL(1, complete_b);
 }
 
 static void test_instances_can_run_at_different_frequencies_at_once(void)
@@ -144,11 +144,11 @@ static void test_completing_one_movement_leaves_the_other_running(void)
     step_both(&pg_a, &pg_b, 10 * ENTRIES);
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_IDLE, pulse_generator_get_state(&pg_a));
-    TEST_ASSERT_EQUAL(1, s_complete_a);
+    TEST_ASSERT_EQUAL(1, complete_a);
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_RUNNING, pulse_generator_get_state(&pg_b));
     TEST_ASSERT_TRUE(hw_b.running);
-    TEST_ASSERT_EQUAL(0, s_complete_b);
+    TEST_ASSERT_EQUAL(0, complete_b);
     TEST_ASSERT_EQUAL(0, hw_b.stream_stop_call_count);
 }
 

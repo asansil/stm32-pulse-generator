@@ -4,8 +4,8 @@
 #include "pulse_generator.h"
 #include "mock_platform.h"
 
-/* SCHEDULED mode, asserted on the simulated pin's
-   timeline: ticks since stream_start, entry 0 (the lead-in) starting at 0. */
+/* SCHEDULED mode, asserted on the simulated pin's timeline: ticks since
+   stream_start, entry 0 (the lead-in) starting at 0. */
 
 #define ENTRIES         8u
 #define WORDS_PER_ENTRY 3u /* the mock's default layout */
@@ -91,8 +91,8 @@ void setUp(void)
 
 void tearDown(void) {}
 
-/* A valid preparation: 63 usable slots, no low watermark. Each
-   test changes only what it is about. */
+/* A valid preparation: 63 usable slots, no low watermark. Each test changes
+   only what it is about. */
 static pulse_generator_scheduled_config_t default_config(void)
 {
     return (pulse_generator_scheduled_config_t){
@@ -136,7 +136,8 @@ static void queue_repeated(uint32_t interval, size_t n)
     }
 }
 
-/* The worked example of dma-engine.md §4.1: start at 0, [1000, 1000, 400]. */
+/* The worked example: start at 0, intervals [1000, 1000, 400]. Each pulse
+   is high for half of the next interval, the last one for half of its own. */
 static const uint32_t worked_example[] = { 1000, 1000, 400 };
 static const uint32_t worked_rises[]   = { 1000, 2000, 2400 };
 static const uint32_t worked_falls[]   = { 1500, 2200, 2600 };
@@ -356,7 +357,7 @@ static void test_a_failed_stream_start_leaves_the_instance_armed_with_its_queue(
     assert_edges(worked_rises, worked_falls, 3);
 }
 
-/* --- timing --- */
+/* --- Timing --- */
 
 static void test_the_worked_example_lands_every_edge_on_its_instant(void)
 {
@@ -440,7 +441,7 @@ static void test_intervals_longer_than_the_period_register_play_whole(void)
     assert_edges(rises, falls, 2);
 }
 
-/* --- end of a movement --- */
+/* --- End of a movement --- */
 
 static void test_a_finished_movement_completes_back_in_armed_with_the_pin_low(void)
 {
@@ -515,7 +516,7 @@ static void test_prepare_resets_the_underrun_count(void)
     TEST_ASSERT_EQUAL(0, pulse_generator_get_underrun_count(&pg));
 }
 
-/* --- streaming --- */
+/* --- Streaming --- */
 
 static void test_events_queued_while_running_continue_the_train_without_a_seam(void)
 {
@@ -551,7 +552,7 @@ static void test_events_queued_after_the_refill_found_the_queue_empty_come_too_l
     TEST_ASSERT_EQUAL(0, pulse_generator_get_pending_events(&pg));
 }
 
-/* --- low watermark --- */
+/* --- Low watermark --- */
 
 static void test_the_low_watermark_fires_once_as_the_queue_drains(void)
 {
@@ -626,7 +627,7 @@ static void test_the_queue_can_be_refilled_from_the_low_watermark_callback(void)
     TEST_ASSERT_EQUAL(1, count_events(PULSE_GENERATOR_EVENT_UNDERRUN));
 }
 
-/* --- late refill and stop --- */
+/* --- Late refill and stop --- */
 
 static void test_a_late_refill_stops_the_movement_with_an_underrun_back_in_armed(void)
 {
@@ -711,7 +712,7 @@ static void test_a_dma_interrupt_after_stop_is_ignored(void)
     TEST_ASSERT_EQUAL(0, event_count);
 }
 
-/* --- pulse count and multi-instance --- */
+/* --- Pulse count and multi-instance --- */
 
 static void test_the_pulse_count_follows_the_pin(void)
 {

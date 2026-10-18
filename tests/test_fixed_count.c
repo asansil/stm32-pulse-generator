@@ -9,7 +9,7 @@
 
 static mock_hw_t hw;
 static uint32_t  buffer[ENTRIES * WORDS_PER_ENTRY];
-static int       s_complete_count;
+static int       complete_count;
 
 static void record_event(pulse_generator_t *pg, pulse_generator_event_t event, void *user_ctx)
 {
@@ -17,7 +17,7 @@ static void record_event(pulse_generator_t *pg, pulse_generator_event_t event, v
     (void)user_ctx;
 
     if (event == PULSE_GENERATOR_EVENT_COMPLETE) {
-        s_complete_count++;
+        complete_count++;
     }
 }
 
@@ -49,12 +49,12 @@ void setUp(void)
 {
     mock_hw_init(&hw);
     memset(buffer, 0, sizeof buffer);
-    s_complete_count = 0;
+    complete_count = 0;
 }
 
 void tearDown(void) {}
 
-/* --- exact count --- */
+/* --- Exact count --- */
 
 static void test_emits_exactly_the_pulses_asked_for(void)
 {
@@ -62,7 +62,7 @@ static void test_emits_exactly_the_pulses_asked_for(void)
 
     for (size_t i = 0; i < sizeof counts / sizeof counts[0]; i++) {
         mock_hw_init(&hw);
-        s_complete_count = 0;
+        complete_count = 0;
         pulse_generator_t pg;
         init_instance(&pg);
         TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_start_fixed_count(&pg, 10000, counts[i]));
@@ -71,7 +71,7 @@ static void test_emits_exactly_the_pulses_asked_for(void)
 
         TEST_ASSERT_EQUAL(counts[i], hw.rise_count);
         TEST_ASSERT_EQUAL(counts[i], hw.fall_count);
-        TEST_ASSERT_EQUAL(1, s_complete_count);
+        TEST_ASSERT_EQUAL(1, complete_count);
     }
 }
 
@@ -81,7 +81,7 @@ static void test_emits_exactly_the_pulses_asked_for_when_split(void)
 
     for (size_t i = 0; i < sizeof counts / sizeof counts[0]; i++) {
         mock_hw_init(&hw);
-        s_complete_count = 0;
+        complete_count = 0;
         pulse_generator_t pg;
         init_instance(&pg);
         TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_start_fixed_count(&pg, 300, counts[i]));
@@ -90,11 +90,11 @@ static void test_emits_exactly_the_pulses_asked_for_when_split(void)
 
         TEST_ASSERT_EQUAL(counts[i], hw.rise_count);
         TEST_ASSERT_EQUAL(counts[i], hw.fall_count);
-        TEST_ASSERT_EQUAL(1, s_complete_count);
+        TEST_ASSERT_EQUAL(1, complete_count);
     }
 }
 
-/* --- exact average frequency --- */
+/* --- Exact average frequency --- */
 
 static void test_a_non_integer_period_keeps_the_average_frequency_exact(void)
 {
@@ -131,7 +131,7 @@ static void test_a_non_integer_split_period_keeps_the_average_frequency_exact(vo
     }
 }
 
-/* --- reset pushes the end back --- */
+/* --- Reset pushes the end back --- */
 
 static void test_reset_pulse_count_pushes_the_end_back(void)
 {
@@ -151,7 +151,7 @@ static void test_reset_pulse_count_pushes_the_end_back(void)
     for (size_t i = 0; i < at_reset + 20; i++) {
         TEST_ASSERT_EQUAL_UINT32(200u * i, hw.rise_ticks[i]);
     }
-    TEST_ASSERT_EQUAL(1, s_complete_count);
+    TEST_ASSERT_EQUAL(1, complete_count);
 }
 
 static void test_a_reset_once_the_end_is_in_the_buffer_leaves_a_gap(void)
@@ -178,7 +178,7 @@ static void test_a_reset_once_the_end_is_in_the_buffer_leaves_a_gap(void)
     for (size_t i = 11; i < 14; i++) {
         TEST_ASSERT_EQUAL_UINT32(200, hw.rise_ticks[i] - hw.rise_ticks[i - 1]);
     }
-    TEST_ASSERT_EQUAL(1, s_complete_count);
+    TEST_ASSERT_EQUAL(1, complete_count);
 }
 
 static void test_a_reset_once_the_end_is_playing_leaves_a_gap(void)
@@ -201,7 +201,7 @@ static void test_a_reset_once_the_end_is_playing_leaves_a_gap(void)
     TEST_ASSERT_TRUE(hw.rise_ticks[3] - hw.rise_ticks[2] > 200);
     TEST_ASSERT_EQUAL_UINT32(200, hw.rise_ticks[4] - hw.rise_ticks[3]);
     TEST_ASSERT_EQUAL_UINT32(200, hw.rise_ticks[5] - hw.rise_ticks[4]);
-    TEST_ASSERT_EQUAL(1, s_complete_count);
+    TEST_ASSERT_EQUAL(1, complete_count);
 }
 
 int main(void)

@@ -11,7 +11,7 @@
 
 static mock_hw_t hw;
 static uint32_t  buffer[ENTRIES * WORDS_PER_ENTRY];
-static int       s_event_count;
+static int       event_count;
 
 static void record_event(pulse_generator_t *pg, pulse_generator_event_t event, void *user_ctx)
 {
@@ -19,7 +19,7 @@ static void record_event(pulse_generator_t *pg, pulse_generator_event_t event, v
     (void)event;
     (void)user_ctx;
 
-    s_event_count++;
+    event_count++;
 }
 
 static void init_with_shape(pulse_generator_t *pg, pulse_generator_pulse_shape_t shape, uint32_t width_ns)
@@ -69,12 +69,12 @@ void setUp(void)
 {
     mock_hw_init(&hw);
     memset(buffer, 0, sizeof buffer);
-    s_event_count = 0;
+    event_count = 0;
 }
 
 void tearDown(void) {}
 
-/* --- start and lifecycle --- */
+/* --- Start and lifecycle --- */
 
 static void test_runs_until_stopped_without_any_event(void)
 {
@@ -89,7 +89,7 @@ static void test_runs_until_stopped_without_any_event(void)
 
     TEST_ASSERT_TRUE(hw.running);
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_RUNNING, pulse_generator_get_state(&pg));
-    TEST_ASSERT_EQUAL(0, s_event_count);
+    TEST_ASSERT_EQUAL(0, event_count);
     TEST_ASSERT_EQUAL(1000 * ENTRIES, hw.rise_count);
     for (size_t i = 0; i < MOCK_MAX_EDGES; i++) {
         TEST_ASSERT_EQUAL_UINT32(200u * i, hw.rise_ticks[i]);
@@ -124,7 +124,7 @@ static void test_start_rejects_a_period_not_longer_than_the_fixed_width(void)
     TEST_ASSERT_EQUAL(0, hw.stream_start_call_count);
 }
 
-static void test_start_while_running_is_invalid_state(void)
+static void test_start_while_running_returns_invalid_state(void)
 {
     pulse_generator_t pg;
     init_instance(&pg);
@@ -147,13 +147,13 @@ static void test_stop_ends_the_movement_and_allows_a_restart(void)
     TEST_ASSERT_EQUAL(1, hw.stream_stop_call_count);
     TEST_ASSERT_FALSE(hw.running);
     TEST_ASSERT_EQUAL(hw.rise_count, hw.fall_count);
-    TEST_ASSERT_EQUAL(0, s_event_count);
+    TEST_ASSERT_EQUAL(0, event_count);
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_start_continuous(&pg, 10000));
     TEST_ASSERT_EQUAL(2, hw.stream_start_call_count);
 }
 
-/* --- exact average frequency --- */
+/* --- Exact average frequency --- */
 
 static void test_a_non_integer_period_keeps_the_average_frequency_exact(void)
 {
@@ -213,7 +213,7 @@ static void test_set_frequency_reaches_the_pin_within_one_window(void)
     TEST_ASSERT_TRUE(hw.rise_ticks[change - 1] >= call_tick);
     TEST_ASSERT_TRUE(hw.rise_ticks[change - 1] <= call_tick + WINDOW_TICKS + SEGMENT_MAX);
     TEST_ASSERT_TRUE(pulse_generator_is_busy(&pg));
-    TEST_ASSERT_EQUAL(0, s_event_count);
+    TEST_ASSERT_EQUAL(0, event_count);
 }
 
 static void test_set_frequency_lets_a_split_period_finish_whole(void)
@@ -306,7 +306,7 @@ static void test_set_frequency_rejects_a_period_not_longer_than_the_fixed_width(
     }
 }
 
-static void test_set_frequency_without_a_continuous_movement_is_invalid_state(void)
+static void test_set_frequency_without_a_continuous_movement_returns_invalid_state(void)
 {
     pulse_generator_t pg;
     init_instance(&pg);
@@ -316,7 +316,7 @@ static void test_set_frequency_without_a_continuous_movement_is_invalid_state(vo
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_STATE, pulse_generator_set_frequency(&pg, 1000));
 }
 
-/* --- pulse count --- */
+/* --- Pulse count --- */
 
 static void test_set_frequency_does_not_reset_the_pulse_count(void)
 {
@@ -351,7 +351,7 @@ static void test_reset_pulse_count_rebases_the_count_and_keeps_running(void)
 
     TEST_ASSERT_EQUAL_UINT32(10, pulse_generator_get_pulse_count(&pg));
     TEST_ASSERT_TRUE(hw.running);
-    TEST_ASSERT_EQUAL(0, s_event_count);
+    TEST_ASSERT_EQUAL(0, event_count);
 }
 
 int main(void)
@@ -360,7 +360,7 @@ int main(void)
     RUN_TEST(test_runs_until_stopped_without_any_event);
     RUN_TEST(test_start_rejects_a_frequency_out_of_range);
     RUN_TEST(test_start_rejects_a_period_not_longer_than_the_fixed_width);
-    RUN_TEST(test_start_while_running_is_invalid_state);
+    RUN_TEST(test_start_while_running_returns_invalid_state);
     RUN_TEST(test_stop_ends_the_movement_and_allows_a_restart);
     RUN_TEST(test_a_non_integer_period_keeps_the_average_frequency_exact);
     RUN_TEST(test_a_non_integer_split_period_keeps_the_average_frequency_exact);
@@ -370,7 +370,7 @@ int main(void)
     RUN_TEST(test_the_last_of_several_set_frequency_calls_wins);
     RUN_TEST(test_set_frequency_out_of_range_keeps_the_old_one);
     RUN_TEST(test_set_frequency_rejects_a_period_not_longer_than_the_fixed_width);
-    RUN_TEST(test_set_frequency_without_a_continuous_movement_is_invalid_state);
+    RUN_TEST(test_set_frequency_without_a_continuous_movement_returns_invalid_state);
     RUN_TEST(test_set_frequency_does_not_reset_the_pulse_count);
     RUN_TEST(test_reset_pulse_count_rebases_the_count_and_keeps_running);
     return UNITY_END();

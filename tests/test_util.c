@@ -196,8 +196,8 @@ static void test_spread_lands_every_pulse_on_its_rounded_instant(void)
 
 static void test_spread_handles_the_full_32_bit_range(void)
 {
-    /* Only the first 1000 of each: enough to exercise the error term near
-       its limits without iterating billions of times. */
+    /* Only the first 1000 of each: enough to exercise the carry near its
+       limits without iterating billions of times. */
     check_spread(0xC0000000u, UINT32_MAX, 1000u);
     check_spread(1000u, UINT32_MAX, 1000u);
 }

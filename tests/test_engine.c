@@ -10,9 +10,9 @@
 static mock_hw_t hw;
 static uint32_t  buffer[ENTRIES * 4u]; /* room for a four-word layout too */
 
-static int                     s_complete_count;
-static int                     s_underrun_count;
-static pulse_generator_state_t s_state_at_event;
+static int                     complete_count;
+static int                     underrun_count;
+static pulse_generator_state_t state_at_event;
 
 /* Reading the state from the callback is a test-only liberty: the header
    allows only the queue functions in there. */
@@ -20,12 +20,12 @@ static void record_event(pulse_generator_t *pg, pulse_generator_event_t event, v
 {
     (void)user_ctx;
 
-    s_state_at_event = pulse_generator_get_state(pg);
+    state_at_event = pulse_generator_get_state(pg);
 
     if (event == PULSE_GENERATOR_EVENT_COMPLETE) {
-        s_complete_count++;
+        complete_count++;
     } else if (event == PULSE_GENERATOR_EVENT_UNDERRUN) {
-        s_underrun_count++;
+        underrun_count++;
     }
 }
 
@@ -62,14 +62,14 @@ void setUp(void)
 {
     mock_hw_init(&hw);
     memset(buffer, 0, sizeof buffer);
-    s_complete_count = 0;
-    s_underrun_count = 0;
-    s_state_at_event = PULSE_GENERATOR_STATE_RUNNING;
+    complete_count = 0;
+    underrun_count = 0;
+    state_at_event = PULSE_GENERATOR_STATE_RUNNING;
 }
 
 void tearDown(void) {}
 
-/* --- start: platform, encoding, pulse shape --- */
+/* --- Start: platform, encoding, pulse shape --- */
 
 static void test_start_fixed_count_arms_the_stream_with_the_whole_buffer(void)
 {
@@ -196,7 +196,7 @@ static void test_stop_padding_follows_the_last_pulse(void)
     }
 }
 
-/* --- start: validation --- */
+/* --- Start: validation --- */
 
 static void assert_start_rejected(pulse_generator_t *pg, uint32_t frequency_hz,
                                   pulse_generator_status_t expected)
@@ -321,7 +321,7 @@ static void test_start_rejects_a_zero_pulse_count(void)
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, pulse_generator_start_fixed_count(&pg, 10000, 0));
 }
 
-static void test_start_when_running_returns_invalid_state(void)
+static void test_start_while_running_returns_invalid_state(void)
 {
     pulse_generator_t pg;
     init_instance(&pg);
@@ -340,7 +340,7 @@ static void test_start_returns_the_platform_error_starting_the_stream(void)
     assert_start_rejected(&pg, 10000, PULSE_GENERATOR_ERROR);
 }
 
-/* --- splitting --- */
+/* --- Splitting --- */
 
 static void test_a_long_period_is_split_into_equal_entries(void)
 {
@@ -443,7 +443,7 @@ static void test_a_fixed_width_spans_entries(void)
     TEST_ASSERT_EQUAL_UINT32(300, hw.fall_ticks[0]);
 }
 
-/* --- refill --- */
+/* --- Refill --- */
 
 static void test_refills_carry_a_movement_past_the_buffer(void)
 {
@@ -492,7 +492,7 @@ static void test_a_refill_serviced_late_but_in_time_is_used(void)
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_notify_dma_half_complete(&pg));
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_RUNNING, pulse_generator_get_state(&pg));
-    TEST_ASSERT_EQUAL(0, s_underrun_count);
+    TEST_ASSERT_EQUAL(0, underrun_count);
 }
 
 static void test_a_late_half_transfer_stops_with_underrun_and_writes_nothing(void)
@@ -514,8 +514,8 @@ static void test_a_late_half_transfer_stops_with_underrun_and_writes_nothing(voi
     TEST_ASSERT_EQUAL(1, hw.stream_stop_call_count);
     TEST_ASSERT_FALSE(hw.running);
     TEST_ASSERT_FALSE(hw.pin_high);
-    TEST_ASSERT_EQUAL(1, s_underrun_count);
-    TEST_ASSERT_EQUAL(0, s_complete_count);
+    TEST_ASSERT_EQUAL(1, underrun_count);
+    TEST_ASSERT_EQUAL(0, complete_count);
 }
 
 static void test_a_late_transfer_complete_stops_with_underrun(void)
@@ -531,7 +531,7 @@ static void test_a_late_transfer_complete_stops_with_underrun(void)
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_UNDERRUN, pulse_generator_notify_dma_complete(&pg));
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_IDLE, pulse_generator_get_state(&pg));
-    TEST_ASSERT_EQUAL(1, s_underrun_count);
+    TEST_ASSERT_EQUAL(1, underrun_count);
 }
 
 static void test_a_movement_can_start_again_after_an_underrun(void)
@@ -557,13 +557,13 @@ static void test_dma_notifications_when_idle_are_a_no_op(void)
     TEST_ASSERT_EQUAL(0, hw.stream_stop_call_count);
 }
 
-static void test_dma_notifications_with_a_null_instance_return_invalid_param(void)
+static void test_dma_notifications_reject_a_null_instance(void)
 {
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, pulse_generator_notify_dma_half_complete(NULL));
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, pulse_generator_notify_dma_complete(NULL));
 }
 
-/* --- clean end --- */
+/* --- Clean end --- */
 
 /* Plays a movement until the stream stops, well past any end it may have. */
 static pulse_generator_status_t play_to_the_end(pulse_generator_t *pg)
@@ -581,9 +581,9 @@ static void test_fixed_count_completes_after_its_last_pulse(void)
 
     TEST_ASSERT_FALSE(hw.running);
     TEST_ASSERT_EQUAL(1, hw.stream_stop_call_count);
-    TEST_ASSERT_EQUAL(1, s_complete_count);
-    TEST_ASSERT_EQUAL(0, s_underrun_count);
-    TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_IDLE, s_state_at_event);
+    TEST_ASSERT_EQUAL(1, complete_count);
+    TEST_ASSERT_EQUAL(0, underrun_count);
+    TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_IDLE, state_at_event);
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_IDLE, pulse_generator_get_state(&pg));
 
     /* Exactly the pulses asked for, none of them cut by the stop. */
@@ -615,7 +615,7 @@ static void test_movements_ending_on_a_half_boundary_complete(void)
 
     for (size_t i = 0; i < sizeof counts / sizeof counts[0]; i++) {
         mock_hw_init(&hw);
-        s_complete_count = 0;
+        complete_count = 0;
         pulse_generator_t pg;
         init_instance(&pg);
         TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_start_fixed_count(&pg, 10000, counts[i]));
@@ -624,7 +624,7 @@ static void test_movements_ending_on_a_half_boundary_complete(void)
 
         TEST_ASSERT_EQUAL(counts[i], hw.rise_count);
         TEST_ASSERT_EQUAL(counts[i], hw.fall_count);
-        TEST_ASSERT_EQUAL(1, s_complete_count);
+        TEST_ASSERT_EQUAL(1, complete_count);
         TEST_ASSERT_FALSE(hw.running);
     }
 }
@@ -638,7 +638,7 @@ static void test_a_single_pulse_completes(void)
     play_to_the_end(&pg);
 
     TEST_ASSERT_EQUAL(1, hw.rise_count);
-    TEST_ASSERT_EQUAL(1, s_complete_count);
+    TEST_ASSERT_EQUAL(1, complete_count);
 }
 
 static void test_a_split_last_pulse_is_not_cut_by_the_end(void)
@@ -653,7 +653,7 @@ static void test_a_split_last_pulse_is_not_cut_by_the_end(void)
     TEST_ASSERT_EQUAL(2, hw.rise_count);
     TEST_ASSERT_EQUAL(2, hw.fall_count);
     TEST_ASSERT_EQUAL_UINT32_ARRAY(falls, hw.fall_ticks, 2);
-    TEST_ASSERT_EQUAL(1, s_complete_count);
+    TEST_ASSERT_EQUAL(1, complete_count);
 }
 
 static void test_complete_is_reported_once(void)
@@ -667,7 +667,7 @@ static void test_complete_is_reported_once(void)
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_notify_dma_half_complete(&pg));
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_notify_dma_complete(&pg));
 
-    TEST_ASSERT_EQUAL(1, s_complete_count);
+    TEST_ASSERT_EQUAL(1, complete_count);
     TEST_ASSERT_EQUAL(1, hw.stream_stop_call_count);
 }
 
@@ -682,10 +682,10 @@ static void test_a_movement_can_start_again_after_complete(void)
     play_to_the_end(&pg);
 
     TEST_ASSERT_EQUAL(5, hw.rise_count); /* the timeline restarts with the stream */
-    TEST_ASSERT_EQUAL(2, s_complete_count);
+    TEST_ASSERT_EQUAL(2, complete_count);
 }
 
-/* --- stop --- */
+/* --- Stop --- */
 
 static void test_stop_halts_the_stream_at_once_without_an_event(void)
 {
@@ -699,8 +699,8 @@ static void test_stop_halts_the_stream_at_once_without_an_event(void)
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_STATE_IDLE, pulse_generator_get_state(&pg));
     TEST_ASSERT_EQUAL(1, hw.stream_stop_call_count);
     TEST_ASSERT_FALSE(hw.running);
-    TEST_ASSERT_EQUAL(0, s_complete_count);
-    TEST_ASSERT_EQUAL(0, s_underrun_count);
+    TEST_ASSERT_EQUAL(0, complete_count);
+    TEST_ASSERT_EQUAL(0, underrun_count);
 }
 
 static void test_stop_forces_a_high_pin_low(void)
@@ -754,10 +754,10 @@ static void test_a_movement_can_start_again_after_a_stop(void)
     play_to_the_end(&pg);
 
     TEST_ASSERT_EQUAL(3, hw.rise_count);
-    TEST_ASSERT_EQUAL(1, s_complete_count);
+    TEST_ASSERT_EQUAL(1, complete_count);
 }
 
-/* --- pulse count --- */
+/* --- Pulse count --- */
 
 /* What get_pulse_count() should read, taken from the timeline rather than
    from the library: the pulses whose fall had already happened when the
@@ -892,7 +892,7 @@ int main(void)
     RUN_TEST(test_start_rejects_a_zero_frequency);
     RUN_TEST(test_fixed_width_rejects_a_period_not_longer_than_the_width);
     RUN_TEST(test_start_rejects_a_zero_pulse_count);
-    RUN_TEST(test_start_when_running_returns_invalid_state);
+    RUN_TEST(test_start_while_running_returns_invalid_state);
     RUN_TEST(test_start_returns_the_platform_error_starting_the_stream);
     RUN_TEST(test_a_long_period_is_split_into_equal_entries);
     RUN_TEST(test_a_split_pulse_has_one_rise_and_one_fall);
@@ -906,7 +906,7 @@ int main(void)
     RUN_TEST(test_a_late_transfer_complete_stops_with_underrun);
     RUN_TEST(test_a_movement_can_start_again_after_an_underrun);
     RUN_TEST(test_dma_notifications_when_idle_are_a_no_op);
-    RUN_TEST(test_dma_notifications_with_a_null_instance_return_invalid_param);
+    RUN_TEST(test_dma_notifications_reject_a_null_instance);
     RUN_TEST(test_fixed_count_completes_after_its_last_pulse);
     RUN_TEST(test_complete_comes_within_one_window_of_the_last_pulse);
     RUN_TEST(test_movements_ending_on_a_half_boundary_complete);
