@@ -35,8 +35,9 @@ intervals a scheduled queue takes. They are plain tick arithmetic: the core
 does not depend on them, and they take the tick rate as a parameter instead
 of an instance.
 
-- **Unit conversions** — µs, ns and Hz to ticks and back, rounded to the
-  nearest tick, reporting a result that does not fit instead of wrapping.
+- **Unit conversions** — µs, ns and Hz to ticks, and ticks to µs, rounded
+  to the nearest unit, reporting a result that does not fit instead of
+  wrapping.
 - **Spread** — an iterator that turns "n pulses over T ticks" into n
   intervals that add up to exactly T and differ by at most one tick, so
   chained segments never drift.
