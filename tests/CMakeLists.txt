@@ -7,6 +7,11 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(unity)
 
+# After Unity, so that only the test executables get them.
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
 add_executable(test_init
     test_init.c
     mock_platform.c
