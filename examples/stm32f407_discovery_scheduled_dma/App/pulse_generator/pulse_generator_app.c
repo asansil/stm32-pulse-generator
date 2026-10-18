@@ -51,7 +51,7 @@ extern TIM_HandleTypeDef htim4;
 /* Phase A: abrupt changes in both directions, so every fall can be checked
    against half of the *next* interval on a logic analyzer. In us, converted
    to ticks when queued. */
-static const uint32_t known_sequence_us[] = {1000, 1000, 400, 400, 2000, 250, 250, 1500, 600, 3000};
+static const uint32_t known_sequence_us[] = {1000U, 1000U, 400U, 400U, 2000U, 250U, 250U, 1500U, 600U, 3000U};
 
 typedef enum {
     PHASE_KNOWN_SEQUENCE, /* A: precomputed, queued in one go */
@@ -159,19 +159,19 @@ static void on_pulse_generator_event(pulse_generator_t *instance,
    which would otherwise open the next one. */
 static void abort_movement(void)
 {
-    pulse_generator_stop(&pg);
+    (void)pulse_generator_stop(&pg);
     HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, GPIO_PIN_RESET);
 }
 
 /* Clears the refill counters, raises the phase marker (PD13) and starts
    whatever has been queued, timing the start: it fills the whole buffer
    from the queue before the stream starts, and the movement starts here.
-   @param pulses Pulses the movement emits, for the cost per pulse. */
+   pulses is what the movement emits, for the cost per pulse. */
 static bool start_movement(uint32_t pulses)
 {
-    refill_count = 0;
-    refill_max_cycles = 0;
-    refill_total_cycles = 0;
+    refill_count = 0U;
+    refill_max_cycles = 0U;
+    refill_total_cycles = 0U;
     movement_pulses = pulses;
 
     HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, GPIO_PIN_SET);
@@ -188,8 +188,8 @@ static bool start_movement(uint32_t pulses)
     return true;
 }
 
-/* Phase A: the whole sequence fits in the queue, so it is queued, finished
-   and started in one go — the precomputed case. */
+/* Phase A, the precomputed case: the whole sequence fits in the queue, so
+   it is queued, finished and started in one go. */
 static bool start_known_sequence(void)
 {
     uint32_t intervals[ARRAY_LEN(known_sequence_us)];
@@ -207,22 +207,23 @@ static bool start_known_sequence(void)
         return false;
     }
 
-    pulse_generator_finish_scheduled(&pg);
+    (void)pulse_generator_finish_scheduled(&pg);
+
     return start_movement(ARRAY_LEN(intervals));
 }
 
 /* Tops the queue up from the ramp generator, up to the feed limit, and
    declares the end of the sequence once the whole profile has been queued.
    With a limit short of the whole profile it never does: the producer just
-   stops, as one that falls behind would.
-   @return false if the library rejected an interval. */
+   stops, as one that falls behind would. Returns false if an interval was
+   rejected. */
 static bool feed_ramp(void)
 {
     uint32_t batch[FEED_BATCH_LEN];
 
     while (ramp_fed < ramp_feed_limit) {
         size_t free_space = pulse_generator_get_free_space(&pg);
-        if (free_space == 0) {
+        if (free_space == 0U) {
             break;
         }
 
@@ -232,9 +233,12 @@ static bool feed_ramp(void)
         }
 
         /* The limit never exceeds the profile, so the generator always has
-           this many left. */
+           this many left: a failure is an interval the timeline rejected. */
         for (size_t n = 0; n < wanted; n++) {
-            ramp_profile_next(&ramp, &batch[n]);
+            if (!ramp_profile_next(&ramp, &batch[n])) {
+                rejected_interval_count++;
+                return false;
+            }
         }
 
         /* Never asked for more than fits, and this is the only producer, so
@@ -247,15 +251,15 @@ static bool feed_ramp(void)
     }
 
     if (!ramp_finished && ramp_fed == ramp_profile_total_pulses(&ramp)) {
-        pulse_generator_finish_scheduled(&pg);
+        (void)pulse_generator_finish_scheduled(&pg);
         ramp_finished = true;
     }
 
     return true;
 }
 
-/* Phases B and C: the queue is filled before the start and then kept topped
-   up from the main loop while the movement runs — the streaming case. The
+/* Phases B and C, the streaming case: the queue is filled before the start
+   and then kept topped up from the main loop while the movement runs. The
    start fills the whole buffer from the queue, and each refill reaches up
    to one window ahead of the pin, so the full queue (63 events, the first
    of them tens of ms long) is far more than the window's worth needed. In
@@ -270,9 +274,9 @@ static bool start_ramp(bool stall_mid_cruise)
         return false;
     }
 
-    uint32_t total = ramp_profile_total_pulses(&ramp);
+    const uint32_t total = ramp_profile_total_pulses(&ramp);
     ramp_feed_limit = stall_mid_cruise ? total / 2U : total;
-    ramp_fed = 0;
+    ramp_fed = 0U;
     ramp_finished = false;
 
     return feed_ramp() && start_movement(ramp_feed_limit);
@@ -284,8 +288,8 @@ static bool start_ramp(bool stall_mid_cruise)
    shows how long an event takes from queue_events() to the pin: the events
    still ahead of it in the queue, plus what the buffer already holds. The
    marked interval is the period of the pulse before it, so it shows up as
-   one pulse 500 us wide, and the delay is measured to its rise.
-   @return false if the library rejected an interval. */
+   one pulse 500 us wide, and the delay is measured to its rise. Returns
+   false if the library rejected an interval. */
 static bool feed_latency(void)
 {
     while (latency_fed < LATENCY_TOTAL_PULSES &&
@@ -310,7 +314,7 @@ static bool feed_latency(void)
 
         latency_fed++;
         if (latency_fed == LATENCY_TOTAL_PULSES) {
-            pulse_generator_finish_scheduled(&pg);
+            (void)pulse_generator_finish_scheduled(&pg);
         }
     }
 
@@ -321,7 +325,7 @@ static bool feed_latency(void)
    the main loop, the short queue a closed loop would keep. */
 static bool start_latency(void)
 {
-    latency_fed = 0;
+    latency_fed = 0U;
 
     return feed_latency() && start_movement(LATENCY_TOTAL_PULSES);
 }
@@ -337,8 +341,8 @@ static bool start_phase(demo_phase_t phase)
     }
 }
 
-/* Keeps the producer of the phase running.
-   @return false if the library rejected an interval. */
+/* Keeps the producer of the phase running. Returns false if an interval was
+   rejected. */
 static bool feed_phase(demo_phase_t phase)
 {
     switch (phase) {
@@ -372,11 +376,11 @@ static void record_phase_stats(void)
 static void service_refill(pulse_generator_status_t (*notify)(pulse_generator_t *))
 {
     HAL_GPIO_WritePin(LD6_GPIO_Port, LD6_Pin, GPIO_PIN_SET);
-    uint32_t start = DWT->CYCCNT;
+    const uint32_t start = DWT->CYCCNT;
 
-    pulse_generator_status_t status = notify(&pg);
+    const pulse_generator_status_t status = notify(&pg);
 
-    uint32_t cycles = DWT->CYCCNT - start;
+    const uint32_t cycles = DWT->CYCCNT - start;
     HAL_GPIO_WritePin(LD6_GPIO_Port, LD6_Pin, GPIO_PIN_RESET);
 
     /* An underrun, late refill or dry queue, is already counted through its
@@ -397,7 +401,7 @@ static void service_refill(pulse_generator_status_t (*notify)(pulse_generator_t 
 static void cycle_counter_init(void)
 {
     CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
-    DWT->CYCCNT = 0;
+    DWT->CYCCNT = 0U;
     DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 }
 

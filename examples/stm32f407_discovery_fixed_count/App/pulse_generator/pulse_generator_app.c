@@ -6,6 +6,8 @@
 
 extern TIM_HandleTypeDef htim4;
 
+#define ARRAY_LEN(a) (sizeof (a) / sizeof (a)[0])
+
 /* 32 entries refilled 16 at a time within a 2 ms window: no entry lasts
    longer than 62.5 us (5250 ticks at 84 MHz), so a refill comes at least
    every 1 ms whatever the frequency. */
@@ -30,16 +32,12 @@ typedef struct {
     uint32_t pulse_count;
 } pg_test_case_t;
 
-/* Hardware validation sequence, run in a loop. The first two are the M5
-   cases; the last one has 4.2 M-tick periods, split into 800 entries each
-   with the high time spanning 400 of them. */
+/* Hardware validation sequence, run in a loop. */
 static const pg_test_case_t test_cases[] = {
     {  1000U,   10U }, /* 84000-tick periods, beyond the 16-bit ARR: 16 entries each */
     { 25000U, 1000U }, /* one entry per period, a refill every 640 us */
-    {    20U,   10U },
+    {    20U,   10U }, /* 4.2 M-tick periods: 800 entries each, high for 400 */
 };
-
-#define PG_TEST_CASE_COUNT (sizeof(test_cases) / sizeof(test_cases[0]))
 
 static stm32f4_pg_hw_t   pg_hw;
 static pulse_generator_t pg;
@@ -93,7 +91,7 @@ static void on_pulse_generator_event(pulse_generator_t *instance,
 static void start_next_test_case(void)
 {
     const pg_test_case_t *test_case = &test_cases[next_test_case];
-    next_test_case = (next_test_case + 1U) % PG_TEST_CASE_COUNT;
+    next_test_case = (next_test_case + 1U) % ARRAY_LEN(test_cases);
 
     /* LD3 (PD13) is high from the start until the library reports the end,
        so the analyzer shows how long after the last pulse that happens
@@ -124,7 +122,7 @@ void pulse_generator_app_init(void)
         },
         .dma = {
             .buffer = pg_dma_buffer,
-            .buffer_words = sizeof(pg_dma_buffer) / sizeof(pg_dma_buffer[0]),
+            .buffer_words = ARRAY_LEN(pg_dma_buffer),
             .entries = PG_DMA_ENTRIES,
             .window_us = PG_DMA_WINDOW_US,
             .min_entry_ns = PG_MIN_ENTRY_NS,
@@ -154,7 +152,9 @@ void pulse_generator_app_process(void)
         return;
     }
 
-    if ((HAL_GetTick() - movement_ended_ms) < PG_PAUSE_MS) {
+    /* Unsigned subtraction keeps working across the 32-bit wrap of the
+       millisecond tick. */
+    if (HAL_GetTick() - movement_ended_ms < PG_PAUSE_MS) {
         return;
     }
 

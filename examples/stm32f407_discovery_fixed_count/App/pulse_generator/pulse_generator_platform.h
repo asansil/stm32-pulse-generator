@@ -38,11 +38,10 @@ typedef struct {
    TIMx_UP, Memory To Peripheral, Circular, Word / Word). Reads the timer's
    instance, prescaler and DMA handle, so it must run after MX_DMA_Init()
    and MX_TIMx_Init().
-   @return PULSE_GENERATOR_ERROR_INVALID_PARAM for a null argument, a channel
-           the timer does not have, a timer without DMA burst, no circular
-           update DMA stream, or a timer whose clock this platform cannot
-           resolve — failures worth catching at startup rather than at the
-           first movement. */
+   Returns PULSE_GENERATOR_ERROR_INVALID_PARAM for a null argument, a
+   channel the timer does not have, a timer without DMA burst, no circular
+   update DMA stream, or a timer whose clock this platform cannot resolve:
+   failures worth catching at startup rather than at the first movement. */
 pulse_generator_status_t stm32f4_pg_hw_init(stm32f4_pg_hw_t *hw,
                                             TIM_HandleTypeDef *htim,
                                             uint32_t channel);

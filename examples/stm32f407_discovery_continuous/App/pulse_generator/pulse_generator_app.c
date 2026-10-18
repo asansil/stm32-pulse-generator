@@ -4,6 +4,8 @@
 
 extern TIM_HandleTypeDef htim4;
 
+#define ARRAY_LEN(a) (sizeof (a) / sizeof (a)[0])
+
 /* 32 entries refilled 16 at a time within a 2 ms window: no entry lasts
    longer than 62.5 us (5250 ticks at 84 MHz), so a frequency change reaches
    the pin within 2 ms, unless the period in progress is longer than that. */
@@ -26,8 +28,7 @@ extern TIM_HandleTypeDef htim4;
    instead of, timer and SysTick sharing one clock, always at a boundary. */
 static const uint32_t demo_frequencies_hz[] = {1000U, 5000U, 25000U, 20U};
 
-#define DEMO_FREQUENCY_COUNT (sizeof demo_frequencies_hz / sizeof demo_frequencies_hz[0])
-#define FREQUENCY_STEP_MS    2025U
+#define FREQUENCY_STEP_MS 2025U
 
 static stm32f4_pg_hw_t   pg_hw;
 static pulse_generator_t pg;
@@ -56,12 +57,8 @@ static void on_pulse_generator_event(pulse_generator_t *instance,
 
     /* A continuous movement never completes; it only ends on stop() or,
        if a refill comes too late, with an underrun. */
-    switch (event) {
-        case PULSE_GENERATOR_EVENT_UNDERRUN:
-            underrun_count++;
-            break;
-        default:
-            break;
+    if (event == PULSE_GENERATOR_EVENT_UNDERRUN) {
+        underrun_count++;
     }
 }
 
@@ -80,7 +77,7 @@ void pulse_generator_app_init(void)
         },
         .dma = {
             .buffer = pg_dma_buffer,
-            .buffer_words = sizeof(pg_dma_buffer) / sizeof(pg_dma_buffer[0]),
+            .buffer_words = ARRAY_LEN(pg_dma_buffer),
             .entries = PG_DMA_ENTRIES,
             .window_us = PG_DMA_WINDOW_US,
             .min_entry_ns = PG_MIN_ENTRY_NS,
@@ -106,13 +103,13 @@ void pulse_generator_app_process(void)
     live_pulse_count = pulse_generator_get_pulse_count(&pg);
 
     /* Unsigned subtraction keeps working across the 32-bit wrap of the
-       millisecond tick (~49 days). */
+       millisecond tick. */
     if (HAL_GetTick() - last_step_ms < FREQUENCY_STEP_MS) {
         return;
     }
     last_step_ms += FREQUENCY_STEP_MS;
 
-    frequency_index = (frequency_index + 1U) % DEMO_FREQUENCY_COUNT;
+    frequency_index = (frequency_index + 1U) % ARRAY_LEN(demo_frequencies_hz);
 
     /* LD3 (PD13) toggles right before every change, so the analyzer shows
        how long the new frequency takes to reach PD12. */
