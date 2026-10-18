@@ -9,18 +9,23 @@
 extern "C" {
 #endif
 
+/* --- Instance handle --- */
+
+/** A single pulse generator instance; see struct pulse_generator_s at the end. */
+typedef struct pulse_generator_s pulse_generator_t;
+
 /* --- Status codes --- */
 
 /**
- * @brief Result/error codes
+ * @brief Return codes of the pulse_generator_* functions and of the
+ *        platform hooks.
  */
 typedef enum {
     PULSE_GENERATOR_OK = 0,
-    PULSE_GENERATOR_ERROR,               /* generic/unspecified hardware fault */
-    PULSE_GENERATOR_ERROR_BUSY,          /* peripheral already running */
-    PULSE_GENERATOR_ERROR_INVALID_PARAM, /* null pointer, bad config, etc. */
-    PULSE_GENERATOR_ERROR_INVALID_STATE, /* operation not valid in current mode/state */
-    PULSE_GENERATOR_ERROR_UNDERRUN,      /* a movement stopped: it ran out of events, or a DMA refill came too late */
+    PULSE_GENERATOR_ERROR,               /**< unspecified hardware fault, from a platform hook */
+    PULSE_GENERATOR_ERROR_INVALID_PARAM, /**< null pointer, bad config, etc. */
+    PULSE_GENERATOR_ERROR_INVALID_STATE, /**< operation not valid in current mode/state */
+    PULSE_GENERATOR_ERROR_UNDERRUN,      /**< a movement stopped: it ran out of events, or a DMA refill came too late */
 } pulse_generator_status_t;
 
 /* --- Modes and state --- */
@@ -29,34 +34,27 @@ typedef enum {
  * @brief Pulse pattern an instance is currently configured to generate.
  */
 typedef enum {
-    PULSE_GENERATOR_MODE_FIXED_COUNT, /* N pulses at a fixed frequency, auto-stop */
-    PULSE_GENERATOR_MODE_CONTINUOUS,  /* fixed frequency, runs until stop() */
-    PULSE_GENERATOR_MODE_SCHEDULED,   /* caller-timed pulses streamed through a queue */
+    PULSE_GENERATOR_MODE_FIXED_COUNT, /**< N pulses at a fixed frequency, auto-stop */
+    PULSE_GENERATOR_MODE_CONTINUOUS,  /**< fixed frequency, runs until stop() */
+    PULSE_GENERATOR_MODE_SCHEDULED,   /**< caller-timed pulses streamed through a queue */
 } pulse_generator_mode_t;
 
 /**
- * @brief Lifecycle state of an instance: IDLE, ARMED or RUNNING.
+ * @brief Lifecycle state of an instance.
  */
 typedef enum {
-    PULSE_GENERATOR_STATE_IDLE,    /* no mode configured, no movement in progress */
-    PULSE_GENERATOR_STATE_ARMED,   /* SCHEDULED mode prepared: the queue accepts events, nothing is emitted */
-    PULSE_GENERATOR_STATE_RUNNING, /* a movement is currently in progress */
+    PULSE_GENERATOR_STATE_IDLE,    /**< no mode configured, no movement in progress */
+    PULSE_GENERATOR_STATE_ARMED,   /**< SCHEDULED mode prepared: the queue accepts events, nothing is emitted */
+    PULSE_GENERATOR_STATE_RUNNING, /**< a movement is currently in progress */
 } pulse_generator_state_t;
 
 /* --- Events --- */
 
 /**
- * @brief A single pulse generator instance. Defined further down; declared
- *        here because an event callback receives the instance reporting it.
- */
-typedef struct pulse_generator_s pulse_generator_t;
-
-/**
  * @brief Things an instance reports to its owner as they happen.
  *
- * One callback carrying an event code, rather than one callback field per
- * notification: a new notification becomes one more value here, with no new
- * struct field and no new registration function.
+ * A single callback receives these codes, so a new notification is just a
+ * new value here.
  */
 typedef enum {
     /** A movement reached its end and stopped itself:
@@ -83,11 +81,9 @@ typedef enum {
         - A SCHEDULED queue ran dry without
           pulse_generator_finish_scheduled(). The refill that needed the next
           event finds the queue empty, up to one window before the pin gets
-          there, and the pulses already written are still played. The last
-          one has no next interval to time its period, so it reuses its own,
-          as if one more event with the same interval had been queued. The
-          event follows up to one window after that last period ends, with
-          the output low.
+          there; the pulses already written are still played, the last one
+          timed as for PULSE_GENERATOR_EVENT_COMPLETE. The event follows up
+          to one window after that last period ends, with the output low.
         - In any mode, a refill interrupt was serviced so late that the
           stream had already started reading the half it was meant to
           refill. Nothing is written: the output is stopped at once with the
@@ -105,15 +101,13 @@ typedef enum {
  * @param event    What happened.
  * @param user_ctx Opaque pointer supplied in pulse_generator_config_t,
  *                 passed back unchanged.
- * @warning May be invoked from interrupt context, from within the
- *          pulse_generator_notify_dma_* functions. Must be short,
- *          non-blocking, and must not call any pulse_generator_* function
- *          on the same instance from within it — with one exception:
+ * @warning May be invoked from interrupt context, inside the
+ *          pulse_generator_notify_dma_* functions: keep it short and
+ *          non-blocking. On the same instance it may only call
  *          pulse_generator_queue_events(), pulse_generator_get_free_space()
- *          and pulse_generator_get_pending_events() may be called on it, so
- *          that a SCHEDULED queue can be refilled straight from
- *          PULSE_GENERATOR_EVENT_LOW_WATERMARK (as long as that is the
- *          queue's only producer).
+ *          and pulse_generator_get_pending_events(), so that a SCHEDULED
+ *          queue can be refilled from PULSE_GENERATOR_EVENT_LOW_WATERMARK
+ *          (provided that is the queue's only producer).
  */
 typedef void (*pulse_generator_event_cb_t)(pulse_generator_t *pg,
                                            pulse_generator_event_t event,
@@ -129,9 +123,9 @@ typedef void (*pulse_generator_event_cb_t)(pulse_generator_t *pg,
  * Words of an entry not named here are written as 0.
  */
 typedef struct {
-    size_t words_per_entry; /* words the DMA writes on each update event */
-    size_t period_index;    /* word holding the period length minus one (ARR) */
-    size_t compare_index;   /* word holding the compare value (CCR) */
+    size_t words_per_entry; /**< words the DMA writes on each update event */
+    size_t period_index;    /**< word holding the period length minus one (ARR) */
+    size_t compare_index;   /**< word holding the compare value (CCR) */
 } pulse_generator_entry_layout_t;
 
 /* --- Platform abstraction --- */
@@ -141,14 +135,18 @@ typedef struct {
  *
  * Each output is driven as a timer in PWM mode whose period and compare
  * preload registers are fed by a circular DMA stream, interrupting once per
- * half buffer. These hooks are the library's only access to that hardware.
+ * half buffer. These hooks are the library's only access to that hardware,
+ * and only access it: all timing arithmetic (tick conversion, period
+ * splitting, late-refill detection) is done by the library.
  *
  * The table holds no per-output state: every hook receives the `hw` handle
  * from pulse_generator_config_t, so one const table serves every output of
  * the platform.
  *
- * Hooks only access the hardware. All timing arithmetic (tick conversion,
- * period splitting, late-refill detection) is done by the library.
+ * get_tick_hz, get_period_max and get_entry_layout are called once per
+ * movement (in SCHEDULED mode, at prepare), never from interrupt context, so
+ * they need not be cheap; what they report must not change while a movement
+ * runs.
  *
  * Every hook is mandatory: pulse_generator_init() rejects a table with any
  * NULL entry.
@@ -158,9 +156,6 @@ typedef struct {
      * @brief Report the timer's tick rate, in Hz.
      * @param hw Opaque per-output handle (see pulse_generator_config_t::hw).
      * @return Counter increments per second, i.e. after the prescaler.
-     * @note Called once per movement (in SCHEDULED mode, at prepare), never
-     *       from interrupt context, so it need not be cheap. Must not change
-     *       while a movement runs.
      */
     uint32_t (*get_tick_hz)(void *hw);
 
@@ -209,9 +204,8 @@ typedef struct {
      * @param hw Opaque per-output handle.
      * @return The register limit, e.g. 0xFFFF for a 16-bit timer or
      *         0xFFFFFFFF for a 32-bit one.
-     * @note Called once per movement (in SCHEDULED mode, at prepare). Return
-     *       the true limit, which need not be 2^n - 1: the library splits
-     *       longer periods and keeps the margin it needs itself.
+     * @note Return the true limit, which need not be 2^n - 1: the library
+     *       splits longer periods and keeps the margin it needs itself.
      */
     uint32_t (*get_period_max)(void *hw);
 
@@ -222,10 +216,9 @@ typedef struct {
      * @param layout Filled in by the hook.
      * @return PULSE_GENERATOR_OK on success, an error code if this output
      *         cannot be driven from a DMA buffer.
-     * @note Called once per movement (in SCHEDULED mode, at prepare). A hook
-     *       because the layout depends on the output: an STM32 burst writes
-     *       consecutive registers, so channel 1 takes ARR, RCR, CCR1 (compare
-     *       at 2) and channel 2 ARR, RCR, CCR1, CCR2 (compare at 3).
+     * @note A hook because the layout depends on the output: an STM32 burst
+     *       writes consecutive registers, so channel 1 takes ARR, RCR, CCR1
+     *       (compare at 2) and channel 2 ARR, RCR, CCR1, CCR2 (compare at 3).
      */
     pulse_generator_status_t (*get_entry_layout)(void *hw, pulse_generator_entry_layout_t *layout);
 } pulse_generator_ops_t;
@@ -236,18 +229,16 @@ typedef struct {
  * @brief Shape of each pulse.
  */
 typedef enum {
-    PULSE_GENERATOR_PULSE_SHAPE_HALF_PERIOD = 0, /* high for half of each period; the default */
-    PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH,     /* high for width_ns, whatever the period */
+    PULSE_GENERATOR_PULSE_SHAPE_HALF_PERIOD = 0, /**< high for half of each period; the default */
+    PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH,     /**< high for width_ns, whatever the period */
 } pulse_generator_pulse_shape_t;
 
 /**
  * @brief Pulse shape part of pulse_generator_config_t.
- *
- * Optional: left all zero, every pulse is high for half of its period.
  */
 typedef struct {
-    /** Shape of each pulse. Zero (unset) means half period. Can be changed
-        later, while IDLE, with pulse_generator_set_pulse_shape(). */
+    /** Shape of each pulse. Can be changed later, while IDLE, with
+        pulse_generator_set_pulse_shape(). */
     pulse_generator_pulse_shape_t shape;
 
     /** High time of every pulse with PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH,
@@ -265,26 +256,30 @@ typedef struct {
         movement runs. */
     uint32_t *buffer;
 
-    /** Words in `buffer`. Must hold `entries` entries of the platform's
-        layout, which is only known, and so only checked, when a movement
-        starts. */
+    /** Words in `buffer`. Must be at least entries * words_per_entry (see
+        ops->get_entry_layout()); checked when the layout is read, at start
+        (in SCHEDULED mode, at prepare). */
     size_t buffer_words;
 
-    /** Entries in the buffer (N). Even, since it is refilled half at a time,
-        and at least 4. */
+    /** Entries in the buffer (N). An entry is one timer cycle: the period and
+        compare values the DMA loads at one update event; a long pulse period
+        spans several. Even, since the buffer is refilled half at a time, and
+        at least 4. */
     size_t entries;
 
-    /** Latency bound in µs, mandatory: no entry lasts longer than
+    /** Latency bound in us, mandatory: no entry lasts longer than
         window_us / entries, so what a refill writes reaches the pin within
-        the window. Longer periods are split into several entries. */
+        the window. Longer periods are split into several entries. A smaller
+        window reacts sooner, at the cost of more refill interrupts on long
+        periods. */
     uint32_t window_us;
 
     /** Shortest entry the hardware can play, in ns: how long the DMA burst
         takes to land after an update event, measured on the board. Rounded
-        up to whole ticks. 0 leaves only the structural minimum of 2 ticks
-        (one high, one low). window_us / entries must be at least twice
-        this: a period longer than one entry is split into pieces of just
-        over half an entry, which must still be playable. */
+        up to whole ticks; 0 leaves only the structural minimum of 2 ticks
+        (one high, one low). window_us / entries must be at least twice this,
+        since splitting a period can leave pieces of just over half an
+        entry. */
     uint32_t min_entry_ns;
 } pulse_generator_dma_config_t;
 
@@ -301,16 +296,21 @@ typedef struct {
  */
 typedef struct {
     /** Operations table for this output's platform. Mandatory, and must
-        outlive the instance — typically a const global in flash. */
+        outlive the instance: typically a const global in flash. */
     const pulse_generator_ops_t *ops;
 
     /** Opaque handle passed unchanged to every hook in `ops`, saying which
         output they act on. Typically holds whatever the integrator's HAL
         calls need (timer handle, channel, DMA stream), since the library
-        never touches vendor types. This is what makes multi-instance just
-        "one hw struct per axis". May be NULL for a platform that needs no
+        never touches vendor types. May be NULL for a platform that needs no
         per-output state. Must outlive the instance. */
     void *hw;
+
+    /** DMA buffer and timing settings. Mandatory. */
+    pulse_generator_dma_config_t dma;
+
+    /** Pulse shape. Optional: zero means half period. */
+    pulse_generator_pulse_config_t pulse;
 
     /** Called when the instance reports an event. Optional: NULL disables
         event notifications entirely. */
@@ -318,21 +318,13 @@ typedef struct {
 
     /** Opaque pointer passed back unchanged to on_event. */
     void *user_ctx;
-
-    /** Pulse shape. Optional: zero means half period. */
-    pulse_generator_pulse_config_t pulse;
-
-    /** DMA buffer and timing settings. Mandatory. */
-    pulse_generator_dma_config_t dma;
 } pulse_generator_config_t;
-
-/* --- Scheduled mode --- */
 
 /**
  * @brief Everything pulse_generator_prepare_scheduled() needs.
  *
  * Copied by prepare_scheduled() and not retained, like
- * pulse_generator_config_t — but the array `queue` points to is used in
+ * pulse_generator_config_t, but the array `queue` points to is used in
  * place for as long as the instance stays prepared.
  */
 typedef struct {
@@ -352,172 +344,16 @@ typedef struct {
     size_t low_watermark;
 } pulse_generator_scheduled_config_t;
 
-/* --- Instance handle --- */
-
-/**
- * @brief Pulse shape part of pulse_generator_t. Private, like every field of
- *        the instance.
- */
-typedef struct {
-    /* Copied from pulse_generator_pulse_config_t by init(), or set by
-       set_pulse_shape() while IDLE. */
-    pulse_generator_pulse_shape_t shape;
-    uint32_t                      width_ns;
-
-    /* width_ns converted when a movement starts; constant while it runs.
-       0 with HALF_PERIOD. */
-    uint32_t width_ticks;
-} pulse_generator_pulse_t;
-
-/**
- * @brief SCHEDULED-mode part of pulse_generator_t. Private, like every
- *        field of the instance: named only so the library can reset it as
- *        a whole.
- */
-typedef struct {
-    /* Copied from pulse_generator_scheduled_config_t by prepare_scheduled()
-       and constant until the next init(). The slots are volatile like the
-       indices: the compiler orders volatile accesses only among
-       themselves, so a plain slot write could legally be moved past the
-       head that publishes it. */
-    volatile uint32_t *queue;
-    size_t             queue_capacity;
-    size_t             low_watermark;
-
-    /* Single-producer / single-consumer ring buffer: head is written only by
-       queue_events(), tail only by the DMA refill, and each side writes its
-       slot before publishing its index, which is what makes it lock-free. */
-    volatile size_t   queue_head;
-    volatile size_t   queue_tail;
-    volatile bool     finish_requested; /* set by finish_scheduled(), read by the refill */
-    volatile uint32_t underrun_count;   /* reset by prepare_scheduled(), not by a restart */
-
-    /* The source, written only by the refill (and by start_scheduled()
-       before the stream starts). */
-    uint32_t                interval_current;    /* interval of the last pulse written */
-    pulse_generator_event_t stop_event;          /* how the movement ends once the source is
-                                                    dry: COMPLETE or UNDERRUN */
-    bool                    low_watermark_armed; /* edge-triggers EVENT_LOW_WATERMARK */
-    bool                    lead_in;             /* the next period is the one before the first rise */
-    bool                    source_dry;          /* the last period has been written: no more from
-                                                    the queue */
-} pulse_generator_sched_t;
-
-/**
- * @brief DMA buffer part of pulse_generator_t. Private, like every field of
- *        the instance: named only so the library can reset it as a whole.
- */
-typedef struct {
-    /* Copied from pulse_generator_dma_config_t by init() and constant until
-       the next init(). The buffer is volatile because the library rewrites
-       it while the DMA stream is reading it. */
-    volatile uint32_t            *buffer;
-    size_t                        buffer_words;
-    size_t                        entries;
-    uint32_t                      window_us;
-    uint32_t                      min_entry_ns;
-
-    /* Captured from the platform and converted to ticks when a movement
-       starts; constant while it runs. */
-    pulse_generator_entry_layout_t layout;
-    uint32_t segment_max_ticks; /* longest entry: window / entries, capped by the registers */
-    uint32_t min_entry_ticks;   /* shortest entry the hardware can play */
-
-    /* Source state: set when a movement starts, advanced by every fill. The
-       period is tick_hz / frequency_hz, kept as a whole part plus a
-       remainder carried from one period to the next, so that the average
-       frequency is exact. FIXED_COUNT runs dry at pulse_target; CONTINUOUS
-       never does, and switches to a new frequency only where a period
-       starts, with no carry. */
-    uint32_t period_ticks;     /* whole part of the period */
-    uint32_t period_remainder; /* tick_hz % frequency_hz */
-    uint32_t period_divisor;   /* frequency_hz */
-    uint32_t period_carry;     /* remainder accumulated so far, below period_divisor */
-    uint32_t pulses_written;   /* pulses put in the buffer since the movement started */
-    uint32_t pulses_requested; /* FIXED_COUNT: the pulse_count it was started with */
-    volatile uint32_t pulse_target; /* FIXED_COUNT: pulses after which the source runs dry;
-                                       pushed back by reset_pulse_count() */
-    volatile uint32_t requested_frequency_hz; /* CONTINUOUS: set by set_frequency(), taken
-                                                 by the source where the next period starts */
-
-    /* Splitting state: the period being cut into entries, which may
-       straddle two fills. */
-    uint32_t split_period; /* length of the period being split */
-    uint32_t split_high;   /* its high time */
-    uint32_t split_start;  /* ticks of it already written */
-    uint32_t split_count;  /* entries it is cut into */
-    uint32_t split_index;  /* entries of it already written; split_count once done */
-
-    /* Whether each half of the buffer, as last filled, holds any entry from
-       the source rather than only stop padding: with neither holding one and
-       the source dry, the movement has finished playing. */
-    bool half_has_pulses[2];
-
-    /* Pulse counting, from the buffer and the stream's position. Fills go
-       in order, so the buffer always holds the last `entries` entries
-       written, the older half's first: falls_before_half says how many
-       falls were written before each half's content, and the falls in
-       entries from there on are read back from the buffer. The two entries
-       a fill overwrites while they may still be playing leave theirs in
-       overwritten_tail. Volatile because get_pulse_count() reads them
-       outside the stream interrupt; fill_count, bumped by every fill, tells
-       it to read again if one ran meanwhile. */
-    volatile uint32_t falls_written;        /* falls written since the movement started */
-    volatile uint32_t falls_before_half[2]; /* falls_written when each half was last filled */
-    volatile uint8_t  newer_half;           /* the half filled last */
-    volatile uint8_t  overwritten_tail;     /* falls in the last two entries the latest fill
-                                               overwrote: bit 1 the last one, bit 0 the one before */
-    volatile uint32_t fill_count;
-    volatile uint32_t count_base;           /* falls finished at the last reset_pulse_count() */
-} pulse_generator_dma_t;
-
-/**
- * @brief A single pulse generator instance (one per axis/output).
- *
- * Fully defined here rather than opaque, so callers can allocate it
- * statically (no heap) and multi-instance is just "one variable per axis".
- * All fields below are private: interact with an instance only through the
- * pulse_generator_* functions, never by reading or writing these fields
- * directly.
- *
- * Fields shared between the DMA stream's ISR and ordinary code are
- * volatile. That buys visibility, not atomicity, which is enough here: each
- * is a single naturally aligned word or byte, with a single writer at any
- * given time.
- */
-struct pulse_generator_s {
-    const pulse_generator_ops_t *ops;
-    void                        *hw;
-    pulse_generator_event_cb_t   on_event;
-    void                        *user_ctx;
-
-    volatile pulse_generator_state_t state;
-    pulse_generator_mode_t           mode; /* meaningful only while state != IDLE */
-
-    /* Captured from the platform when a movement starts (in SCHEDULED mode,
-       when it is prepared) and constant from then on, so set_frequency()
-       needs no hook call to read it back. */
-    uint32_t tick_hz;
-
-    /* Shape of every pulse, whatever the mode. */
-    pulse_generator_pulse_t pulse;
-
-    /* SCHEDULED mode only; meaningless in the other modes. */
-    pulse_generator_sched_t sched;
-
-    /* The DMA buffer and the source filling it, shared by every mode. */
-    pulse_generator_dma_t dma;
-};
-
-/* --- Public API --- */
+/* --- Lifecycle --- */
 
 /**
  * @brief Initialize an instance against one hardware output.
  * @param pg     Instance to initialize. Its previous contents are
  *               overwritten, so this must not be called on an instance with
  *               a movement in progress.
- * @param config Platform ops, hardware handle and optional event callback.
- *               See pulse_generator_config_t. Not retained.
+ * @param config Platform ops, hardware handle, DMA buffer, pulse shape and
+ *               optional event callback. See pulse_generator_config_t. Not
+ *               retained.
  * @return PULSE_GENERATOR_OK on success;
  *         PULSE_GENERATOR_ERROR_INVALID_PARAM if pg or config is NULL, if
  *         config->ops is NULL or lacks any hook, if config->dma is invalid
@@ -554,20 +390,22 @@ pulse_generator_status_t pulse_generator_set_pulse_shape(
     pulse_generator_pulse_shape_t shape,
     uint32_t width_ns);
 
+/* --- Fixed count mode --- */
+
 /**
  * @brief Start a movement of exactly pulse_count pulses at a fixed
  *        frequency, stopping itself when the last one has been emitted.
- * @param pg          Instance.
+ * @param pg           Instance.
  * @param frequency_hz Pulse frequency in Hz. The period (tick rate /
- *                    frequency, exact on average) must be at least the
- *                    minimum entry and, with
- *                    PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH, longer than
- *                    the pulse width; there is no lower limit, since long
- *                    periods are split into several entries.
- * @param pulse_count Number of pulses to emit. Must be between 1 and
- *                    UINT32_MAX / 2, which leaves
- *                    pulse_generator_reset_pulse_count() room to push the
- *                    end of the movement back.
+ *                     frequency, exact on average) must be at least the
+ *                     minimum entry and, with
+ *                     PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH, longer than
+ *                     the pulse width; there is no lower limit, since long
+ *                     periods are split into several entries.
+ * @param pulse_count  Number of pulses to emit. Must be between 1 and
+ *                     UINT32_MAX / 2, which leaves
+ *                     pulse_generator_reset_pulse_count() room to push the
+ *                     end of the movement back.
  * @return PULSE_GENERATOR_OK if the movement was started;
  *         PULSE_GENERATOR_ERROR_INVALID_STATE if the instance is not IDLE:
  *         a movement is in progress, or it is prepared for SCHEDULED mode;
@@ -580,12 +418,14 @@ pulse_generator_status_t pulse_generator_set_pulse_shape(
  * @note Returns as soon as the hardware is armed: the pulses are emitted in
  *       the background. Completion is reported as
  *       PULSE_GENERATOR_EVENT_COMPLETE, up to one window after the last
- *       period ends, i.e. after the low half that follows the last pulse.
+ *       period ends, i.e. after the low time that follows the last pulse.
  */
 pulse_generator_status_t pulse_generator_start_fixed_count(
     pulse_generator_t *pg,
     uint32_t frequency_hz,
     uint32_t pulse_count);
+
+/* --- Continuous mode --- */
 
 /**
  * @brief Start an open-ended movement at a fixed frequency, running until
@@ -603,6 +443,28 @@ pulse_generator_status_t pulse_generator_start_fixed_count(
 pulse_generator_status_t pulse_generator_start_continuous(
     pulse_generator_t *pg,
     uint32_t frequency_hz);
+
+/**
+ * @brief Change the frequency of a CONTINUOUS movement while it runs,
+ *        without disturbing the pulse count.
+ * @param pg           Instance.
+ * @param frequency_hz New pulse frequency in Hz, same range as at start
+ *                     time.
+ * @return PULSE_GENERATOR_OK if the new frequency was accepted;
+ *         PULSE_GENERATOR_ERROR_INVALID_STATE if no CONTINUOUS movement is
+ *         in progress;
+ *         PULSE_GENERATOR_ERROR_INVALID_PARAM on a null instance or an out
+ *         of range frequency, with the previous frequency kept.
+ * @note Touches no hardware, and is cheap enough to call from a control
+ *       loop on every cycle.
+ * @note Takes effect at the start of the next period written into the
+ *       buffer (a period already begun finishes at the old frequency), so it
+ *       reaches the pin within one window, plus the rest of that period if
+ *       it is split over several entries.
+ * @note Of several calls before then, the last one wins. The average
+ *       frequency is exact from the change on.
+ */
+pulse_generator_status_t pulse_generator_set_frequency(pulse_generator_t *pg, uint32_t frequency_hz);
 
 /* --- Scheduled mode --- */
 
@@ -685,12 +547,12 @@ size_t pulse_generator_queue_events(
  *       back in ARMED, ready for the next start.
  * @note The movement starts at the call: the first rise comes the first
  *       interval after it, plus one priming period without a pulse (see
- *       pulse_generator_ops_t::stream_start). The whole buffer is filled
- *       from the queue before the stream starts, and from then on each
- *       refill takes events up to one window ahead of the pin. When
- *       streaming, queue at least a window's worth of events before
- *       starting and keep the queue that far ahead: a queue found empty
- *       without a finish request ends the movement as an underrun.
+ *       pulse_generator_ops_t::stream_start).
+ * @note The whole buffer is filled from the queue before the stream starts,
+ *       and from then on each refill takes events up to one window ahead of
+ *       the pin. When streaming, queue at least a window's worth of events
+ *       before starting and keep the queue that far ahead: a queue found
+ *       empty without a finish request ends the movement as an underrun.
  */
 pulse_generator_status_t pulse_generator_start_scheduled(pulse_generator_t *pg);
 
@@ -742,6 +604,8 @@ size_t pulse_generator_get_pending_events(const pulse_generator_t *pg);
  */
 uint32_t pulse_generator_get_underrun_count(const pulse_generator_t *pg);
 
+/* --- Control and status --- */
+
 /**
  * @brief Stop the movement in progress immediately. The output is forced
  *        low, and the entries left in the buffer are discarded.
@@ -792,37 +656,16 @@ uint32_t pulse_generator_get_pulse_count(const pulse_generator_t *pg);
 /**
  * @brief Reset the pulse counter of the movement in progress to zero.
  * @param pg Instance.
+ *        A no-op if pg is NULL or no movement is RUNNING.
  * @note For a FIXED_COUNT movement this also pushes back the point at which
  *       it stops itself, since the target is counted from the counter.
- * @note A reset that comes once the end of the movement
- *       has already been written into the buffer, i.e. within its last
- *       window, leaves a gap without pulses, up to one window long, before
- *       the extra pulses start.
+ * @note A reset that comes once the end of the movement has already been
+ *       written into the buffer, i.e. within its last window, leaves a gap
+ *       without pulses, up to one window long, before the extra pulses start.
  */
 void pulse_generator_reset_pulse_count(pulse_generator_t *pg);
 
-/**
- * @brief Change the frequency of a CONTINUOUS movement while it runs,
- *        without disturbing the pulse count.
- * @param pg           Instance.
- * @param frequency_hz New pulse frequency in Hz, same range as at start
- *                     time.
- * @return PULSE_GENERATOR_OK if the new frequency was accepted;
- *         PULSE_GENERATOR_ERROR_INVALID_STATE if no CONTINUOUS movement is
- *         in progress;
- *         PULSE_GENERATOR_ERROR_INVALID_PARAM on a null instance or an out
- *         of range frequency, with the previous frequency kept.
- * @note Touches no hardware, and is cheap enough to call from a control
- *       loop on every cycle.
- * @note The frequency is only stored, and the source takes it at the start
- *       of the next period it writes into the buffer; a period already
- *       begun is always finished at the old frequency. The change therefore
- *       reaches the pin within one window, plus, when the period being
- *       written then is split over several entries, whatever of it remains.
- *       Of several calls made before then, the last one wins. The average
- *       frequency is exact from the change on.
- */
-pulse_generator_status_t pulse_generator_set_frequency(pulse_generator_t *pg, uint32_t frequency_hz);
+/* --- DMA interrupt entry points --- */
 
 /**
  * @brief Report that the DMA stream has transferred the first half of the
@@ -830,11 +673,7 @@ pulse_generator_status_t pulse_generator_set_frequency(pulse_generator_t *pg, ui
  * @param pg Instance owning the stream.
  * @return PULSE_GENERATOR_OK normally;
  *         PULSE_GENERATOR_ERROR_UNDERRUN if the movement has just stopped
- *         as an underrun, mirroring PULSE_GENERATOR_EVENT_UNDERRUN: either
- *         the interrupt was serviced so late that the stream was already
- *         reading the half to be refilled (nothing was written), or a
- *         SCHEDULED queue ran dry without pulse_generator_finish_scheduled()
- *         and its last period has finished playing;
+ *         as an underrun (see PULSE_GENERATOR_EVENT_UNDERRUN);
  *         PULSE_GENERATOR_ERROR_INVALID_PARAM on a null instance;
  *         otherwise whatever the platform returned.
  * @note Refills the half just transferred with the next entries of the
@@ -854,6 +693,157 @@ pulse_generator_status_t pulse_generator_notify_dma_half_complete(pulse_generato
  * @note Same behaviour, for the second half.
  */
 pulse_generator_status_t pulse_generator_notify_dma_complete(pulse_generator_t *pg);
+
+/* --- Instance storage (private) --- */
+
+/** @brief Pulse shape part of pulse_generator_t. */
+typedef struct {
+    /* Copied from pulse_generator_pulse_config_t by init(), or set by
+       set_pulse_shape() while IDLE. */
+    pulse_generator_pulse_shape_t shape;
+    uint32_t                      width_ns;
+
+    /* width_ns converted when a movement starts; constant while it runs.
+       0 with HALF_PERIOD. */
+    uint32_t width_ticks;
+} pulse_generator_pulse_t;
+
+/**
+ * @brief DMA buffer part of pulse_generator_t, named only so the library can
+ *        reset it as a whole.
+ */
+typedef struct {
+    /* Copied from pulse_generator_dma_config_t by init() and constant until
+       the next init(). The buffer is volatile because the library rewrites
+       it while the DMA stream is reading it. */
+    volatile uint32_t            *buffer;
+    size_t                        buffer_words;
+    size_t                        entries;
+    uint32_t                      window_us;
+    uint32_t                      min_entry_ns;
+
+    /* Captured from the platform and converted to ticks when a movement
+       starts; constant while it runs. */
+    pulse_generator_entry_layout_t layout;
+    uint32_t segment_max_ticks; /* longest entry: window / entries, capped by the registers */
+    uint32_t min_entry_ticks;   /* shortest entry the hardware can play */
+
+    /* Source state: set when a movement starts, advanced by every fill. The
+       period is tick_hz / frequency_hz, kept as a whole part plus a
+       remainder carried from one period to the next, so that the average
+       frequency is exact. FIXED_COUNT runs dry at pulse_target; CONTINUOUS
+       never does, and switches to a new frequency only where a period
+       starts, with no carry. */
+    uint32_t period_ticks;     /* whole part of the period */
+    uint32_t period_remainder; /* tick_hz % frequency_hz */
+    uint32_t period_divisor;   /* frequency_hz */
+    uint32_t period_carry;     /* remainder accumulated so far, below period_divisor */
+    uint32_t pulses_written;   /* pulses put in the buffer since the movement started */
+    uint32_t pulses_requested; /* FIXED_COUNT: the pulse_count it was started with */
+    volatile uint32_t pulse_target; /* FIXED_COUNT: pulses after which the source runs dry;
+                                       pushed back by reset_pulse_count() */
+    volatile uint32_t requested_frequency_hz; /* CONTINUOUS: set by set_frequency(), taken
+                                                 by the source where the next period starts */
+
+    /* Splitting state: the period being cut into entries, which may
+       straddle two fills. */
+    uint32_t split_period; /* length of the period being split */
+    uint32_t split_high;   /* its high time */
+    uint32_t split_start;  /* ticks of it already written */
+    uint32_t split_count;  /* entries it is cut into */
+    uint32_t split_index;  /* entries of it already written; split_count once done */
+
+    /* Whether each half of the buffer, as last filled, holds any entry from
+       the source rather than only stop padding: with neither holding one and
+       the source dry, the movement has finished playing. */
+    bool half_has_pulses[2];
+
+    /* Pulse counting, rebuilt from the buffer and the stream's position:
+       fills go in order, so the buffer always holds the last `entries`
+       entries written, the older half's first. Volatile because
+       get_pulse_count() reads them outside the stream interrupt. */
+    volatile uint32_t falls_written;        /* falls written since the movement started */
+    volatile uint32_t falls_before_half[2]; /* falls written before each half's content;
+                                               the rest are read back from the buffer */
+    volatile uint8_t  newer_half;           /* the half filled last */
+    volatile uint8_t  overwritten_tail;     /* falls in the two entries the latest fill overwrote
+                                               while they may still be playing: bit 1 the last
+                                               one, bit 0 the one before */
+    volatile uint32_t fill_count;           /* bumped by every fill: get_pulse_count() reads
+                                               again if it changed meanwhile */
+    volatile uint32_t count_base;           /* falls finished at the last reset_pulse_count() */
+} pulse_generator_dma_t;
+
+/**
+ * @brief SCHEDULED-mode part of pulse_generator_t, named only so the library
+ *        can reset it as a whole.
+ */
+typedef struct {
+    /* Copied from pulse_generator_scheduled_config_t by prepare_scheduled()
+       and constant until the next init(). The slots are volatile like the
+       indices: the compiler orders volatile accesses only among
+       themselves, so a plain slot write could legally be moved past the
+       head that publishes it. */
+    volatile uint32_t *queue;
+    size_t             queue_capacity;
+    size_t             low_watermark;
+
+    /* Single-producer / single-consumer ring buffer: head is written only by
+       queue_events(), tail only by the DMA refill, and each side writes its
+       slot before publishing its index, which is what makes it lock-free. */
+    volatile size_t   queue_head;
+    volatile size_t   queue_tail;
+    volatile bool     finish_requested; /* set by finish_scheduled(), read by the refill */
+    volatile uint32_t underrun_count;   /* reset by prepare_scheduled(), not by a restart */
+
+    /* The source, written only by the refill (and by start_scheduled()
+       before the stream starts). */
+    uint32_t                interval_current;    /* interval of the last pulse written */
+    pulse_generator_event_t stop_event;          /* how the movement ends once the source is
+                                                    dry: COMPLETE or UNDERRUN */
+    bool                    low_watermark_armed; /* edge-triggers EVENT_LOW_WATERMARK */
+    bool                    lead_in;             /* the next period is the one before the first rise */
+    bool                    source_dry;          /* the last period has been written: no more from
+                                                    the queue */
+} pulse_generator_sched_t;
+
+/**
+ * @brief A single pulse generator instance (one per axis/output).
+ *
+ * Fully defined here rather than opaque, so callers can allocate it
+ * statically (no heap) and multi-instance is just "one variable per axis".
+ * All fields below are private: interact with an instance only through the
+ * pulse_generator_* functions, never by reading or writing these fields
+ * directly.
+ *
+ * Fields shared between the DMA stream's ISR and ordinary code are
+ * volatile. That buys visibility, not atomicity, which is enough here: each
+ * is a single naturally aligned word or byte, with a single writer at any
+ * given time.
+ */
+struct pulse_generator_s {
+    const pulse_generator_ops_t *ops;
+    void                        *hw;
+    pulse_generator_event_cb_t   on_event;
+    void                        *user_ctx;
+
+    volatile pulse_generator_state_t state;
+    pulse_generator_mode_t           mode; /* meaningful only while state != IDLE */
+
+    /* Captured from the platform when a movement starts (in SCHEDULED mode,
+       when it is prepared) and constant from then on, so set_frequency()
+       needs no hook call to read it back. */
+    uint32_t tick_hz;
+
+    /* Shape of every pulse, whatever the mode. */
+    pulse_generator_pulse_t pulse;
+
+    /* The DMA buffer and the source filling it, shared by every mode. */
+    pulse_generator_dma_t dma;
+
+    /* SCHEDULED mode only; meaningless in the other modes. */
+    pulse_generator_sched_t sched;
+};
 
 #ifdef __cplusplus
 }
