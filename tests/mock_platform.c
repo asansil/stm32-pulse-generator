@@ -218,6 +218,8 @@ void mock_hw_init(mock_hw_t *hw)
     };
 }
 
+/* Shared by mock_step() and mock_advance(): with pg NULL, no interrupt is
+   delivered. */
 static pulse_generator_status_t play(pulse_generator_t *pg, mock_hw_t *hw, size_t k)
 {
     pulse_generator_status_t status = PULSE_GENERATOR_OK;

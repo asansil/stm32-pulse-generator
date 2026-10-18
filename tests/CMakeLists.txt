@@ -7,6 +7,11 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(unity)
 
+# After Unity, so that only the test executables get them.
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
 add_executable(test_init
     test_init.c
     mock_platform.c
@@ -60,6 +65,15 @@ add_executable(test_multi_instance
 target_link_libraries(test_multi_instance PRIVATE pulse_generator unity)
 
 add_test(NAME multi_instance COMMAND test_multi_instance)
+
+add_executable(test_pulse_shape
+    test_pulse_shape.c
+    mock_platform.c
+)
+
+target_link_libraries(test_pulse_shape PRIVATE pulse_generator unity)
+
+add_test(NAME pulse_shape COMMAND test_pulse_shape)
 
 add_executable(test_util
     test_util.c

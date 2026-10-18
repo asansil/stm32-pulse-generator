@@ -34,6 +34,8 @@ void setUp(void)
 
 void tearDown(void) {}
 
+/* --- Instance and platform --- */
+
 static void test_init_with_valid_config_leaves_instance_idle(void)
 {
     pulse_generator_t pg;
@@ -45,21 +47,21 @@ static void test_init_with_valid_config_leaves_instance_idle(void)
     TEST_ASSERT_FALSE(pulse_generator_is_busy(&pg));
 }
 
-static void test_init_with_null_pg_returns_invalid_param(void)
+static void test_init_rejects_a_null_instance(void)
 {
     pulse_generator_config_t config = valid_config();
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, pulse_generator_init(NULL, &config));
 }
 
-static void test_init_with_null_config_returns_invalid_param(void)
+static void test_init_rejects_a_null_config(void)
 {
     pulse_generator_t pg;
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, pulse_generator_init(&pg, NULL));
 }
 
-static void test_init_with_null_ops_returns_invalid_param(void)
+static void test_init_rejects_a_null_ops_table(void)
 {
     pulse_generator_t pg;
     pulse_generator_config_t config = valid_config();
@@ -68,7 +70,7 @@ static void test_init_with_null_ops_returns_invalid_param(void)
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, pulse_generator_init(&pg, &config));
 }
 
-static void test_init_with_any_hook_missing_is_rejected(void)
+static void test_init_rejects_an_ops_table_with_any_hook_missing(void)
 {
     for (int missing = 0; missing < 6; missing++) {
         pulse_generator_ops_t ops = g_mock_ops;
@@ -132,6 +134,8 @@ static void test_init_clears_state_left_by_a_previous_movement(void)
     TEST_ASSERT_EQUAL_UINT32(0, pulse_generator_get_pulse_count(&pg));
 }
 
+/* --- DMA config --- */
+
 static void test_init_rejects_a_null_buffer(void)
 {
     pulse_generator_t pg;
@@ -168,11 +172,13 @@ static void test_init_rejects_a_zero_window(void)
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, pulse_generator_init(&pg, &config));
 }
 
+/* --- Pulse shape --- */
+
 static void test_init_rejects_an_unknown_pulse_shape(void)
 {
     pulse_generator_t pg;
     pulse_generator_config_t config = valid_config();
-    config.dma.pulse_shape = (pulse_generator_pulse_shape_t)2;
+    config.pulse.shape = (pulse_generator_pulse_shape_t)2;
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, pulse_generator_init(&pg, &config));
 }
@@ -181,7 +187,7 @@ static void test_init_rejects_fixed_width_without_a_width(void)
 {
     pulse_generator_t pg;
     pulse_generator_config_t config = valid_config();
-    config.dma.pulse_shape = PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH;
+    config.pulse.shape = PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH;
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_ERROR_INVALID_PARAM, pulse_generator_init(&pg, &config));
 }
@@ -190,8 +196,8 @@ static void test_init_accepts_fixed_width_with_a_width(void)
 {
     pulse_generator_t pg;
     pulse_generator_config_t config = valid_config();
-    config.dma.pulse_shape = PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH;
-    config.dma.width_ns = 5000;
+    config.pulse.shape = PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH;
+    config.pulse.width_ns = 5000;
 
     TEST_ASSERT_EQUAL(PULSE_GENERATOR_OK, pulse_generator_init(&pg, &config));
 }
@@ -200,10 +206,10 @@ int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_init_with_valid_config_leaves_instance_idle);
-    RUN_TEST(test_init_with_null_pg_returns_invalid_param);
-    RUN_TEST(test_init_with_null_config_returns_invalid_param);
-    RUN_TEST(test_init_with_null_ops_returns_invalid_param);
-    RUN_TEST(test_init_with_any_hook_missing_is_rejected);
+    RUN_TEST(test_init_rejects_a_null_instance);
+    RUN_TEST(test_init_rejects_a_null_config);
+    RUN_TEST(test_init_rejects_a_null_ops_table);
+    RUN_TEST(test_init_rejects_an_ops_table_with_any_hook_missing);
     RUN_TEST(test_init_accepts_a_platform_without_per_output_state);
     RUN_TEST(test_init_calls_no_hook);
     RUN_TEST(test_init_clears_state_left_by_a_previous_movement);

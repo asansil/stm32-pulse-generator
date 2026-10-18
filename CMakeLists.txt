@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.15)
+cmake_minimum_required(VERSION 3.21)
 project(pulse_generator C)
 
 set(CMAKE_C_STANDARD 99)
@@ -13,9 +13,13 @@ target_include_directories(pulse_generator PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-option(PULSEGEN_BUILD_TESTS "Build host unit tests for pulse_generator" OFF)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(pulse_generator PRIVATE -Wall -Wextra -Wpedantic -Wconversion)
+endif()
 
-if(PULSEGEN_BUILD_TESTS)
+option(PULSE_GENERATOR_BUILD_TESTS "Build host unit tests for pulse_generator" OFF)
+
+if(PULSE_GENERATOR_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()

@@ -196,8 +196,8 @@ static void test_spread_lands_every_pulse_on_its_rounded_instant(void)
 
 static void test_spread_handles_the_full_32_bit_range(void)
 {
-    /* Only the first 1000 of each: enough to exercise the error term near
-       its limits without iterating billions of times. */
+    /* Only the first 1000 of each: enough to exercise the carry near its
+       limits without iterating billions of times. */
     check_spread(0xC0000000u, UINT32_MAX, 1000u);
     check_spread(1000u, UINT32_MAX, 1000u);
 }
@@ -208,11 +208,11 @@ static void test_spread_counts_down_and_then_runs_dry(void)
     uint32_t interval = 0;
 
     TEST_ASSERT_TRUE(pulse_generator_spread_init(&spread, 2u, 10u));
-    TEST_ASSERT_EQUAL_UINT32(2u, pulse_generator_spread_remaining(&spread));
+    TEST_ASSERT_EQUAL_UINT32(2u, pulse_generator_spread_get_remaining(&spread));
     TEST_ASSERT_TRUE(pulse_generator_spread_next(&spread, &interval));
-    TEST_ASSERT_EQUAL_UINT32(1u, pulse_generator_spread_remaining(&spread));
+    TEST_ASSERT_EQUAL_UINT32(1u, pulse_generator_spread_get_remaining(&spread));
     TEST_ASSERT_TRUE(pulse_generator_spread_next(&spread, &interval));
-    TEST_ASSERT_EQUAL_UINT32(0u, pulse_generator_spread_remaining(&spread));
+    TEST_ASSERT_EQUAL_UINT32(0u, pulse_generator_spread_get_remaining(&spread));
 
     interval = UNTOUCHED;
     TEST_ASSERT_FALSE(pulse_generator_spread_next(&spread, &interval));
@@ -239,9 +239,9 @@ static void test_spread_tolerates_null_arguments(void)
 
     TEST_ASSERT_TRUE(pulse_generator_spread_init(&spread, 1u, 1u));
     TEST_ASSERT_FALSE(pulse_generator_spread_next(&spread, NULL));
-    TEST_ASSERT_EQUAL_UINT32(1u, pulse_generator_spread_remaining(&spread));
+    TEST_ASSERT_EQUAL_UINT32(1u, pulse_generator_spread_get_remaining(&spread));
     TEST_ASSERT_FALSE(pulse_generator_spread_next(NULL, &(uint32_t){0}));
-    TEST_ASSERT_EQUAL_UINT32(0u, pulse_generator_spread_remaining(NULL));
+    TEST_ASSERT_EQUAL_UINT32(0u, pulse_generator_spread_get_remaining(NULL));
 }
 
 /* --- Timeline --- */

@@ -89,7 +89,7 @@ pulse_generator_status_t stm32f4_pg_hw_init(stm32f4_pg_hw_t *hw,
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }
 
-    uint32_t tick_hz = resolve_tick_hz(htim);
+    const uint32_t tick_hz = resolve_tick_hz(htim);
     if (tick_hz == 0) {
         return PULSE_GENERATOR_ERROR_INVALID_PARAM;
     }

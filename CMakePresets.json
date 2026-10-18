@@ -12,7 +12,7 @@
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/build",
             "cacheVariables": {
-                "PULSEGEN_BUILD_TESTS": "ON",
+                "PULSE_GENERATOR_BUILD_TESTS": "ON",
                 "CMAKE_C_COMPILER": "gcc"
             }
         }
