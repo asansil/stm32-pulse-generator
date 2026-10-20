@@ -27,16 +27,32 @@ extern TIM_HandleTypeDef htim4;
 /* Gap between movements, so each one stands apart on the analyzer. */
 #define PG_PAUSE_MS 500U
 
+#define PG_HALF_PERIOD PULSE_GENERATOR_PULSE_SHAPE_HALF_PERIOD
+#define PG_FIXED_WIDTH PULSE_GENERATOR_PULSE_SHAPE_FIXED_WIDTH
+
 typedef struct {
-    uint32_t frequency_hz;
-    uint32_t pulse_count;
+    uint32_t                      frequency_hz;
+    uint32_t                      pulse_count;
+    pulse_generator_pulse_shape_t pulse_shape;
+    uint32_t                      width_ns; /* only read with PG_FIXED_WIDTH */
 } pg_test_case_t;
 
-/* Hardware validation sequence, run in a loop. */
+/* Hardware validation sequence, run in a loop. Each fixed-width case follows
+   the half-period case with the same frequency, so the analyzer shows them
+   side by side. */
 static const pg_test_case_t test_cases[] = {
-    {  1000U,   10U }, /* 84000-tick periods, beyond the 16-bit ARR: 16 entries each */
-    { 25000U, 1000U }, /* one entry per period, a refill every 640 us */
-    {    20U,   10U }, /* 4.2 M-tick periods: 800 entries each, high for 400 */
+    /* 84000-tick periods, beyond the 16-bit ARR: 16 entries each */
+    {  1000U,   10U, PG_HALF_PERIOD,      0U },
+    /* 840 ticks high, inside the first 5250-tick entry of each period */
+    {  1000U,   10U, PG_FIXED_WIDTH,  10000U },
+    /* 8400 ticks high, spread over the first two entries of each period */
+    {  1000U,   10U, PG_FIXED_WIDTH, 100000U },
+    /* one entry per period, a refill every 640 us */
+    { 25000U, 1000U, PG_HALF_PERIOD,      0U },
+    /* 840 of 3360 ticks high: 25 % duty, still one entry per period */
+    { 25000U, 1000U, PG_FIXED_WIDTH,  10000U },
+    /* 4.2 M-tick periods: 800 entries each, high for 400 */
+    {    20U,   10U, PG_HALF_PERIOD,      0U },
 };
 
 static stm32f4_pg_hw_t   pg_hw;
@@ -52,6 +68,7 @@ static volatile uint32_t movement_ended_ms;
 /* Watch these in the debugger during hardware validation. */
 static pulse_generator_status_t hw_init_status;
 static pulse_generator_status_t pg_init_status;
+static pulse_generator_status_t last_shape_status;
 static pulse_generator_status_t last_start_status;
 static volatile uint32_t completed_movement_count;
 static volatile uint32_t underrun_count;     /* should stay 0 */
@@ -95,10 +112,19 @@ static void start_next_test_case(void)
 
     /* LD3 (PD13) is high from the start until the library reports the end,
        so the analyzer shows how long after the last pulse that happens
-       (the low half of the last period plus up to one window). */
+       (the low part of the last period plus up to one window). */
     movement_ended = false;
     movement_pulse_count = 0U;
     HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, GPIO_PIN_SET);
+
+    /* The previous movement has ended, so the instance is IDLE and accepts
+       a new shape. */
+    last_shape_status = pulse_generator_set_pulse_shape(&pg, test_case->pulse_shape,
+                                                        test_case->width_ns);
+    if (last_shape_status != PULSE_GENERATOR_OK) {
+        end_movement();
+        return;
+    }
 
     last_start_status = pulse_generator_start_fixed_count(&pg, test_case->frequency_hz,
                                                           test_case->pulse_count);
