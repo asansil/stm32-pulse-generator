@@ -65,17 +65,18 @@ static size_t            next_test_case;
 static volatile bool     movement_ended = true;
 static volatile uint32_t movement_ended_ms;
 
-/* Watch these in the debugger during hardware validation. */
-static pulse_generator_status_t hw_init_status;
-static pulse_generator_status_t pg_init_status;
-static pulse_generator_status_t last_shape_status;
-static pulse_generator_status_t last_start_status;
+/* Watch these in the debugger during hardware validation. Volatile so that
+   an optimized build keeps them: most are only written. */
+static volatile pulse_generator_status_t hw_init_status;
+static volatile pulse_generator_status_t pg_init_status;
+static volatile pulse_generator_status_t last_shape_status;
+static volatile pulse_generator_status_t last_start_status;
 static volatile uint32_t completed_movement_count;
 static volatile uint32_t underrun_count;     /* should stay 0 */
 static volatile uint32_t notify_error_count; /* notify_dma_* returned an error; should stay 0 */
 static volatile uint32_t live_pulse_count;   /* refreshed on every pass of the main loop */
-static uint32_t          movement_pulse_count; /* highest count read during the movement */
-static uint32_t          last_movement_pulse_count;
+static volatile uint32_t movement_pulse_count; /* highest count read during the movement */
+static volatile uint32_t last_movement_pulse_count;
 
 static void end_movement(void)
 {

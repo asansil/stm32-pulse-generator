@@ -39,10 +39,11 @@ static uint32_t pg_dma_buffer[PG_DMA_ENTRIES * PG_DMA_MAX_WORDS_PER_ENTRY];
 static uint32_t frequency_index;
 static uint32_t last_step_ms;
 
-/* Watch these in the debugger during hardware validation. */
-static pulse_generator_status_t hw_init_status;
-static pulse_generator_status_t pg_init_status;
-static pulse_generator_status_t start_status;
+/* Watch these in the debugger during hardware validation. Volatile so that
+   an optimized build keeps them: most are only written. */
+static volatile pulse_generator_status_t hw_init_status;
+static volatile pulse_generator_status_t pg_init_status;
+static volatile pulse_generator_status_t start_status;
 static volatile uint32_t rejected_frequency_count; /* should stay 0 */
 static volatile uint32_t underrun_count;           /* should stay 0 */
 static volatile uint32_t notify_error_count;       /* notify_dma_* returned an error; should stay 0 */

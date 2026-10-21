@@ -108,18 +108,19 @@ static uint32_t       latency_fed;     /* phase D: intervals handed to the libra
 static uint32_t       movement_pulses; /* pulses the movement in progress emits */
 static uint32_t       movement_start_cycles;
 
-/* Watch these in the debugger during hardware validation. The failure
-   counters should stay 0. */
-static pulse_generator_status_t hw_init_status;
-static pulse_generator_status_t pg_init_status;
-static pulse_generator_status_t prepare_status;
+/* Watch these in the debugger during hardware validation. Volatile so that
+   an optimized build keeps them: most are only written. The
+   failure counters should stay 0. */
+static volatile pulse_generator_status_t hw_init_status;
+static volatile pulse_generator_status_t pg_init_status;
+static volatile pulse_generator_status_t prepare_status;
 static volatile uint32_t rejected_interval_count;
 static volatile uint32_t start_failure_count;
 static volatile uint32_t notify_error_count; /* notify_dma_* returned an error */
 static volatile uint32_t complete_count;
 static volatile uint32_t underrun_count;
 static volatile uint32_t low_watermark_count;
-static phase_stats_t     phase_stats[PHASE_COUNT]; /* last movement of each phase */
+static volatile phase_stats_t phase_stats[PHASE_COUNT]; /* last movement of each phase */
 
 /* Refill cost of the movement in progress, written by the DMA interrupt. */
 static volatile uint32_t refill_count;
@@ -357,7 +358,7 @@ static bool feed_phase(demo_phase_t phase)
    and no refill writes the counters any more. */
 static void record_phase_stats(void)
 {
-    phase_stats_t *stats = &phase_stats[demo_phase];
+    volatile phase_stats_t *stats = &phase_stats[demo_phase];
 
     stats->pulses = movement_pulses;
     stats->refills = refill_count;
